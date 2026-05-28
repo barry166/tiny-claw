@@ -24,6 +24,7 @@ class HealthReport:
     provider: str
     tools: tuple[str, ...]
     state_dir: Path
+    workdir: Path
 
     def render(self) -> str:
         tools = ", ".join(self.tools) if self.tools else "none"
@@ -31,7 +32,8 @@ class HealthReport:
             f"status={self.status}\n"
             f"provider={self.provider}\n"
             f"tools={tools}\n"
-            f"state_dir={self.state_dir}"
+            f"state_dir={self.state_dir}\n"
+            f"workdir={self.workdir}"
         )
 
 
@@ -47,6 +49,7 @@ class Application:
             provider=self.engine.provider_name,
             tools=self.tools.names(),
             state_dir=self.settings.state_dir,
+            workdir=self.settings.workdir,
         )
 
     def run(self, *, prompt: str, max_steps: int) -> RunResult:
@@ -56,12 +59,13 @@ class Application:
 def build_application(settings: Settings) -> Application:
     provider = _build_provider(settings)
     memory = FileMemoryStore(settings.state_dir)
-    tools = _build_tool_registry()
+    tools = _build_tool_registry(settings.workdir)
     engine = MainLoop(
         provider=provider,
         context_builder=ContextBuilder(),
         memory=memory,
         tools=tools,
+        workdir=settings.workdir,
     )
     return Application(settings=settings, engine=engine, tools=tools)
 
@@ -75,8 +79,9 @@ def _build_provider(settings: Settings) -> LLMProvider:
     raise ConfigurationError(f"Unsupported provider: {settings.provider_name}")
 
 
-def _build_tool_registry() -> ToolRegistry:
+def _build_tool_registry(workdir: Path | None = None) -> ToolRegistry:
+    resolved_workdir = Path.cwd().resolve() if workdir is None else workdir.resolve()
     registry = ToolRegistry()
-    registry.register(BashTool(enabled=False))
-    registry.register(EditTool(root=Path.cwd(), enabled=False))
+    registry.register(BashTool(workdir=resolved_workdir, enabled=False))
+    registry.register(EditTool(root=resolved_workdir, enabled=False))
     return registry

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Self
 
@@ -20,6 +20,7 @@ class Settings:
     provider_name: str = "echo"
     model: str = "echo"
     state_dir: Path = DEFAULT_STATE_DIR
+    workdir: Path = field(default_factory=lambda: Path.cwd().resolve())
     openai_api_key: str | None = None
 
     @classmethod
@@ -34,12 +35,14 @@ class Settings:
         provider_name = env.get("TINY_CLAW_PROVIDER", "echo").lower()
         model = env.get("TINY_CLAW_MODEL", provider_name)
         state_dir = Path(env.get("TINY_CLAW_STATE_DIR", str(DEFAULT_STATE_DIR))).expanduser()
+        workdir = Path(env.get("TINY_CLAW_WORKDIR", str(Path.cwd()))).expanduser().resolve()
 
         return cls(
             log_level=_normalize_log_level(resolved_log_level),
             provider_name=provider_name,
             model=model,
             state_dir=state_dir,
+            workdir=workdir,
             openai_api_key=env.get("TINY_CLAW_OPENAI_API_KEY"),
         )
 

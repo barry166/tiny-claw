@@ -49,7 +49,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_parser.add_argument(
         "--max-steps",
-        default=1,
+        default=20,
         type=_positive_int,
         help="Maximum main-loop steps for this run.",
     )

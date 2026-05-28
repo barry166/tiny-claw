@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from tiny_claw._internal.errors import ToolError
@@ -13,6 +14,7 @@ from tiny_claw._internal.tools.base import ToolInput, ToolOutput
 
 @dataclass(frozen=True)
 class BashTool:
+    workdir: Path
     enabled: bool = False
     timeout_seconds: int = 30
 
@@ -60,6 +62,7 @@ class BashTool:
             check=False,
             capture_output=True,
             text=True,
+            cwd=self.workdir,
             timeout=self.timeout_seconds,
         )
         output = completed.stdout if completed.returncode == 0 else completed.stderr

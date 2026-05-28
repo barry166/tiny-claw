@@ -7,6 +7,8 @@ import pytest
 from tiny_claw._internal.errors import ToolError
 from tiny_claw._internal.schema.message import ToolDefinition
 from tiny_claw._internal.tools.base import ToolInput, ToolOutput
+from tiny_claw._internal.tools.builtin.bash import BashTool
+from tiny_claw._internal.tools.builtin.edit import EditTool
 from tiny_claw._internal.tools.registry import ToolRegistry
 
 
@@ -62,3 +64,18 @@ def test_tool_registry_rejects_unknown_tool() -> None:
 
     with pytest.raises(ToolError, match="Unknown tool"):
         registry.get("missing")
+
+
+def test_bash_tool_runs_inside_workdir(tmp_path) -> None:
+    tool = BashTool(workdir=tmp_path, enabled=True)
+
+    result = tool.run(ToolInput(arguments={"command": "pwd"}))
+
+    assert result.output == str(tmp_path)
+
+
+def test_edit_tool_rejects_paths_outside_root(tmp_path) -> None:
+    tool = EditTool(root=tmp_path, enabled=True)
+
+    with pytest.raises(ToolError, match="under the configured root"):
+        tool.run(ToolInput(arguments={"path": "../outside.txt", "content": "nope"}))
