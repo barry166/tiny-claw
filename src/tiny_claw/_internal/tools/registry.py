@@ -3,28 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
-from typing import Protocol
+from typing import Any
 
 from tiny_claw._internal.errors import ToolError
-
-
-@dataclass(frozen=True)
-class ToolResult:
-    output: str
-
-
-class Tool(Protocol):
-    @property
-    def name(self) -> str:
-        """Unique tool name."""
-
-    @property
-    def description(self) -> str:
-        """Human-readable tool description."""
-
-    def run(self, payload: Mapping[str, object]) -> ToolResult:
-        """Run the tool with a structured payload."""
+from tiny_claw._internal.schema.message import ToolDefinition
+from tiny_claw._internal.tools.base import Tool, ToolInput, ToolOutput, ToolResult
 
 
 class ToolRegistry:
@@ -42,8 +25,14 @@ class ToolRegistry:
         except KeyError as exc:
             raise ToolError(f"Unknown tool: {name}") from exc
 
-    def call(self, name: str, payload: Mapping[str, object]) -> ToolResult:
-        return self.get(name).run(payload)
+    def call(self, name: str, arguments: Mapping[str, Any]) -> ToolOutput:
+        return self.get(name).run(ToolInput(arguments=arguments))
 
     def names(self) -> tuple[str, ...]:
         return tuple(sorted(self._tools))
+
+    def definitions(self) -> tuple[ToolDefinition, ...]:
+        return tuple(self._tools[name].definition() for name in self.names())
+
+
+__all__ = ["Tool", "ToolInput", "ToolOutput", "ToolRegistry", "ToolResult"]

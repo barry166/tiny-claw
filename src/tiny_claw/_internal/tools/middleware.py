@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Protocol
 
-from tiny_claw._internal.tools.registry import ToolResult
+from tiny_claw._internal.tools.base import ToolOutput
 
 
 class ToolMiddleware(Protocol):
@@ -17,8 +17,8 @@ class ToolMiddleware(Protocol):
         self,
         name: str,
         payload: Mapping[str, object],
-        result: ToolResult,
-    ) -> ToolResult:
+        result: ToolOutput,
+    ) -> ToolOutput:
         """Return the result that should be exposed to the caller."""
 
 
@@ -36,8 +36,8 @@ class MiddlewareStack:
         self,
         name: str,
         payload: Mapping[str, object],
-        result: ToolResult,
-    ) -> ToolResult:
+        result: ToolOutput,
+    ) -> ToolOutput:
         finalized = result
         for middleware in reversed(self.middlewares):
             finalized = middleware.after_call(name, payload, finalized)

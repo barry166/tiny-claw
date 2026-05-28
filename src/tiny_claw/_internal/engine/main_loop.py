@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from tiny_claw._internal.context.builder import ContextBuilder
 from tiny_claw._internal.memory.file_store import FileMemoryStore
-from tiny_claw._internal.provider.base import ModelProvider, ModelRequest
+from tiny_claw._internal.provider.base import LLMProvider, LLMRequest
 from tiny_claw._internal.tools.registry import ToolRegistry
 
 
@@ -19,7 +19,7 @@ class RunResult:
 
 @dataclass(frozen=True)
 class MainLoop:
-    provider: ModelProvider
+    provider: LLMProvider
     context_builder: ContextBuilder
     memory: FileMemoryStore
     tools: ToolRegistry
@@ -32,7 +32,11 @@ class MainLoop:
         recent_memory = self.memory.read_recent(limit=5)
         context = self.context_builder.build(prompt=prompt, memories=recent_memory)
         response = self.provider.complete(
-            ModelRequest(messages=context.messages, max_steps=max_steps)
+            LLMRequest(
+                messages=context.messages,
+                tools=self.tools.definitions(),
+                max_steps=max_steps,
+            )
         )
         self.memory.append("last_prompt", prompt)
         self.memory.append("last_response", response.text)

@@ -9,7 +9,7 @@ from tiny_claw._internal.context.builder import ContextBuilder
 from tiny_claw._internal.engine.main_loop import MainLoop, RunResult
 from tiny_claw._internal.errors import ConfigurationError
 from tiny_claw._internal.memory.file_store import FileMemoryStore
-from tiny_claw._internal.provider.base import ModelProvider
+from tiny_claw._internal.provider.base import LLMProvider
 from tiny_claw._internal.provider.echo import EchoProvider
 from tiny_claw._internal.provider.openai import OpenAIProvider
 from tiny_claw._internal.settings import Settings
@@ -66,7 +66,7 @@ def build_application(settings: Settings) -> Application:
     return Application(settings=settings, engine=engine, tools=tools)
 
 
-def _build_provider(settings: Settings) -> ModelProvider:
+def _build_provider(settings: Settings) -> LLMProvider:
     provider_name = settings.provider_name.lower()
     if provider_name == "echo":
         return EchoProvider(model=settings.model)

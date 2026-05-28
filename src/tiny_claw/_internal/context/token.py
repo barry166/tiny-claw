@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from math import ceil
 
-from tiny_claw._internal.provider.base import ChatMessage
+from tiny_claw._internal.schema.message import Message
 
 
 def estimate_tokens(text: str) -> int:
@@ -15,11 +15,11 @@ def estimate_tokens(text: str) -> int:
 
 
 def trim_messages_to_budget(
-    messages: Sequence[ChatMessage],
+    messages: Sequence[Message],
     *,
     max_tokens: int,
-) -> tuple[ChatMessage, ...]:
-    selected: list[ChatMessage] = []
+) -> tuple[Message, ...]:
+    selected: list[Message] = []
     used = 0
     for message in reversed(messages):
         cost = estimate_tokens(message.content)

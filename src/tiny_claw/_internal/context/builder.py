@@ -5,12 +5,12 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from tiny_claw._internal.provider.base import ChatMessage
+from tiny_claw._internal.schema.message import Message
 
 
 @dataclass(frozen=True)
 class PromptContext:
-    messages: tuple[ChatMessage, ...]
+    messages: tuple[Message, ...]
 
 
 @dataclass(frozen=True)
@@ -18,10 +18,8 @@ class ContextBuilder:
     system_prompt: str = "You are Tiny Claw, a layered Python CLI framework."
 
     def build(self, *, prompt: str, memories: Sequence[str] = ()) -> PromptContext:
-        messages = [ChatMessage(role="system", content=self.system_prompt)]
+        messages = [Message.system(self.system_prompt)]
         if memories:
-            messages.append(
-                ChatMessage(role="system", content="Recent memory:\n" + "\n".join(memories))
-            )
-        messages.append(ChatMessage(role="user", content=prompt.strip()))
+            messages.append(Message.system("Recent memory:\n" + "\n".join(memories)))
+        messages.append(Message.user(prompt.strip()))
         return PromptContext(messages=tuple(messages))

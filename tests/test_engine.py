@@ -3,24 +3,34 @@ from __future__ import annotations
 from tiny_claw._internal.context.builder import ContextBuilder
 from tiny_claw._internal.engine.main_loop import MainLoop
 from tiny_claw._internal.memory.file_store import FileMemoryStore
-from tiny_claw._internal.provider.base import ModelRequest, ModelResponse
+from tiny_claw._internal.provider.base import LLMRequest, LLMResponse
+from tiny_claw._internal.schema.message import Message, Role
 from tiny_claw._internal.tools.registry import ToolRegistry
 
 
 class FakeProvider:
+    def __init__(self) -> None:
+        self.last_request: LLMRequest | None = None
+
     @property
     def name(self) -> str:
         return "fake"
 
-    def complete(self, request: ModelRequest) -> ModelResponse:
+    def complete(self, request: LLMRequest) -> LLMResponse:
+        self.last_request = request
         assert request.messages
-        return ModelResponse(text="fake response", provider=self.name, model="fake-model")
+        return LLMResponse(
+            message=Message(role=Role.ASSISTANT, content="fake response"),
+            provider=self.name,
+            model="fake-model",
+        )
 
 
 def test_main_loop_accepts_injected_components(tmp_path) -> None:
     memory = FileMemoryStore(tmp_path)
+    provider = FakeProvider()
     engine = MainLoop(
-        provider=FakeProvider(),
+        provider=provider,
         context_builder=ContextBuilder(),
         memory=memory,
         tools=ToolRegistry(),
@@ -34,3 +44,5 @@ def test_main_loop_accepts_injected_components(tmp_path) -> None:
         "last_prompt: ping",
         "last_response: fake response",
     )
+    assert provider.last_request is not None
+    assert provider.last_request.tools == ()

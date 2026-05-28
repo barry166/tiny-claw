@@ -28,9 +28,8 @@ dist/
 # Local runtime state
 .tmp-state/
 .tiny-claw/
+.omx/
 
 # Tooling and editor noise
 .idea/
 .vscode/
-
-.omx/

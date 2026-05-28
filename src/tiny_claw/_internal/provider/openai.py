@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from tiny_claw._internal.errors import ConfigurationError, ProviderError
-from tiny_claw._internal.provider.base import ModelRequest, ModelResponse
+from tiny_claw._internal.provider.base import LLMRequest, LLMResponse
 
 
 @dataclass(frozen=True)
@@ -25,7 +25,7 @@ class OpenAIProvider:
     def name(self) -> str:
         return "openai"
 
-    def complete(self, _request: ModelRequest) -> ModelResponse:
+    def complete(self, _request: LLMRequest) -> LLMResponse:
         raise ProviderError(
             "OpenAI provider adapter is reserved for future SDK integration; "
             "use TINY_CLAW_PROVIDER=echo for the current no-dependency skeleton"
