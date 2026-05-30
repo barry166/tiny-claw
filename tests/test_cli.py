@@ -8,6 +8,24 @@ from pathlib import Path
 from tiny_claw.cli import main
 
 
+def test_run_command_exposes_mode_option(capsys, monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("TINY_CLAW_STATE_DIR", str(tmp_path))
+
+    exit_code = main(["run", "--mode", "think", "hello"])
+
+    assert exit_code == 0
+    assert capsys.readouterr().out.strip() == "hello"
+
+
+def test_run_command_accepts_plan_act_mode(capsys, monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("TINY_CLAW_STATE_DIR", str(tmp_path))
+
+    exit_code = main(["run", "--mode", "plan-act", "--max-steps", "1", "hello"])
+
+    assert exit_code == 0
+    assert capsys.readouterr().out.strip() == "hello"
+
+
 def test_health_command_returns_success(capsys, monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("TINY_CLAW_STATE_DIR", str(tmp_path))
 

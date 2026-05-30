@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Protocol
 
 from tiny_claw._internal.schema.message import Message, ToolDefinition
+
+
+class ToolChoice(StrEnum):
+    NONE = "none"
+    AUTO = "auto"
 
 
 @dataclass(frozen=True)
@@ -13,6 +19,7 @@ class LLMRequest:
     messages: tuple[Message, ...]
     tools: tuple[ToolDefinition, ...] = ()
     max_steps: int = 1
+    tool_choice: ToolChoice = ToolChoice.AUTO
 
 
 @dataclass(frozen=True)

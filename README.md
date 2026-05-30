@@ -28,8 +28,14 @@ uv sync --dev
 uv run tiny-claw --help
 uv run tiny-claw health
 uv run tiny-claw run "hello"
+uv run tiny-claw run --mode think "先分析并制定计划"
+uv run tiny-claw run --mode plan-act "先规划再执行"
 uv run python -m tiny_claw --help
 ```
+
+`run --mode think` 会隐藏工具定义，适合“先思考/先计划/不要改代码”的场景；
+`run --mode plan-act` 会先隐藏工具完成规划，再自动进入 ReAct 执行阶段。默认
+`run --mode act` 会允许主循环按 ReAct 方式暴露工具定义。
 
 ## Check
 

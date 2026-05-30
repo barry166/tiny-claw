@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from tiny_claw._internal.context.builder import ContextBuilder
-from tiny_claw._internal.engine.main_loop import MainLoop, RunResult
+from tiny_claw._internal.engine.main_loop import MainLoop, RunMode, RunResult
 from tiny_claw._internal.errors import ConfigurationError
 from tiny_claw._internal.memory.file_store import FileMemoryStore
 from tiny_claw._internal.provider.base import LLMProvider
@@ -52,8 +52,14 @@ class Application:
             workdir=self.settings.workdir,
         )
 
-    def run(self, *, prompt: str, max_steps: int) -> RunResult:
-        return self.engine.run(prompt=prompt, max_steps=max_steps)
+    def run(
+        self,
+        *,
+        prompt: str,
+        max_steps: int,
+        mode: RunMode = RunMode.ACT,
+    ) -> RunResult:
+        return self.engine.run(prompt=prompt, max_steps=max_steps, mode=mode)
 
 
 def build_application(settings: Settings) -> Application:

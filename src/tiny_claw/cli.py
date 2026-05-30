@@ -9,6 +9,7 @@ from typing import cast
 
 from tiny_claw import __version__
 from tiny_claw._internal.app import Application, build_application
+from tiny_claw._internal.engine.main_loop import RunMode
 from tiny_claw._internal.errors import ExitCode, TinyClawError
 from tiny_claw._internal.logging_config import configure_logging
 from tiny_claw._internal.settings import Settings
@@ -16,6 +17,7 @@ from tiny_claw._internal.settings import Settings
 Handler = Callable[[argparse.Namespace, Application], int]
 
 LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+RUN_MODES = ("act", "think", "plan-act")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -53,6 +55,15 @@ def build_parser() -> argparse.ArgumentParser:
         type=_positive_int,
         help="Maximum main-loop steps for this run.",
     )
+    run_parser.add_argument(
+        "--mode",
+        choices=RUN_MODES,
+        default="act",
+        help=(
+            "Run mode: 'think' hides tools; 'act' allows ReAct tool use; "
+            "'plan-act' plans first, then acts."
+        ),
+    )
     run_parser.set_defaults(handler=_handle_run)
 
     return parser
@@ -86,7 +97,11 @@ def _handle_health(_args: argparse.Namespace, app: Application) -> int:
 
 
 def _handle_run(args: argparse.Namespace, app: Application) -> int:
-    result = app.run(prompt=args.prompt, max_steps=args.max_steps)
+    result = app.run(
+        prompt=args.prompt,
+        max_steps=args.max_steps,
+        mode=RunMode(args.mode),
+    )
     print(result.text)
     return int(ExitCode.OK)
 

@@ -39,6 +39,8 @@
 uv run tiny-claw --help
 uv run tiny-claw health
 uv run tiny-claw run "hello"
+uv run tiny-claw run --mode think "先分析并制定计划"
+uv run tiny-claw run --mode plan-act "先规划再执行"
 uv run python -m tiny_claw --help
 ```
 
@@ -55,6 +57,9 @@ tiny-claw = "tiny_claw.cli:main"
 - 未经用户明确要求，不新增运行时依赖。
 - 真实 SDK / 厂商接入必须收敛在 `provider/` 适配层后面。
 - 工具能力默认禁用，除非调用方显式启用。
+- `run --mode think` 用于先分析 / 先计划场景，主循环不会向模型暴露工具定义，也会阻止意外工具调用。
+- `run --mode plan-act` 会先隐藏工具完成规划，再自动进入 ReAct 执行阶段；规划轮计入 `--max-steps`。
+- `run --mode act` 是默认 ReAct 执行模式，会按工具策略向 provider 传递工具定义。
 - `engine` 相关测试应优先使用依赖注入，方便注入 fake provider、fake memory、fake
   tools。
 - 源码保持 `src/` layout，测试保持在 `tests/`。
