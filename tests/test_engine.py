@@ -16,6 +16,7 @@ from tiny_claw._internal.memory.file_store import FileMemoryStore
 from tiny_claw._internal.provider.base import LLMRequest, LLMResponse, ToolChoice
 from tiny_claw._internal.schema.message import Message, Role, ToolCall, ToolDefinition
 from tiny_claw._internal.tools.base import ToolInput, ToolOutput
+from tiny_claw._internal.tools.builtin.read import ReadTool
 from tiny_claw._internal.tools.registry import ToolRegistry
 
 
@@ -135,6 +136,45 @@ def test_main_loop_runs_tool_observation_then_next_turn(tmp_path) -> None:
         and message.tool_call_id == "call-1"
         and message.content == "observed:ok"
         for message in second_request_messages
+    )
+
+
+def test_main_loop_can_read_file_then_return_summary(tmp_path) -> None:
+    file_content = "hello.txt 说 tiny-claw 已经可以读取文件。"
+    prompt = (
+        "请调用工具读取一下当前工作区目录下 hello.txt 文件的内容，并用一句话向我总结它说了什么。"
+    )
+    (tmp_path / "hello.txt").write_text(file_content, encoding="utf-8")
+    read_call = ToolCall(
+        id="call-read-1",
+        name="read",
+        arguments={"path": "hello.txt", "start_line": 1, "max_lines": 20},
+    )
+    provider = FakeProvider(
+        responses=[
+            Message.assistant(tool_calls=(read_call,)),
+            Message.assistant("hello.txt 说 tiny-claw 已经具备读取工作区文件的能力。"),
+        ]
+    )
+    tools = ToolRegistry()
+    tools.register(ReadTool(root=tmp_path))
+    engine = _build_engine(provider=provider, tools=tools, workdir=tmp_path)
+
+    result = engine.run(
+        prompt=prompt,
+        max_steps=2,
+    )
+
+    assert result.text == "hello.txt 说 tiny-claw 已经具备读取工作区文件的能力。"
+    assert result.stop_reason == STOP_REASON_FINAL
+    assert result.steps == 2
+    assert provider.requests[0].tools == (ReadTool(root=tmp_path).definition(),)
+    assert any(
+        message.role is Role.TOOL
+        and message.tool_call_id == "call-read-1"
+        and message.name == "read"
+        and "1: hello.txt 说 tiny-claw 已经可以读取文件。" in message.content
+        for message in provider.requests[1].messages
     )
 
 

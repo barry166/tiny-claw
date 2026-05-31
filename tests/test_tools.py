@@ -9,6 +9,7 @@ from tiny_claw._internal.schema.message import ToolDefinition
 from tiny_claw._internal.tools.base import ToolInput, ToolOutput
 from tiny_claw._internal.tools.builtin.bash import BashTool
 from tiny_claw._internal.tools.builtin.edit import EditTool
+from tiny_claw._internal.tools.builtin.read import ReadTool
 from tiny_claw._internal.tools.registry import ToolRegistry
 
 
@@ -79,3 +80,52 @@ def test_edit_tool_rejects_paths_outside_root(tmp_path) -> None:
 
     with pytest.raises(ToolError, match="under the configured root"):
         tool.run(ToolInput(arguments={"path": "../outside.txt", "content": "nope"}))
+
+
+def test_read_tool_reads_file_inside_root(tmp_path) -> None:
+    (tmp_path / "notes.txt").write_text("alpha\nbeta\n", encoding="utf-8")
+    tool = ReadTool(root=tmp_path)
+
+    result = tool.run(ToolInput(arguments={"path": "notes.txt"}))
+
+    assert result.output == "1: alpha\n2: beta"
+
+
+def test_read_tool_respects_line_range(tmp_path) -> None:
+    (tmp_path / "notes.txt").write_text("one\ntwo\nthree\nfour\n", encoding="utf-8")
+    tool = ReadTool(root=tmp_path)
+
+    result = tool.run(ToolInput(arguments={"path": "notes.txt", "start_line": 2, "max_lines": 2}))
+
+    assert result.output == "2: two\n3: three"
+
+
+def test_read_tool_rejects_paths_outside_root(tmp_path) -> None:
+    tool = ReadTool(root=tmp_path)
+
+    with pytest.raises(ToolError, match="under the configured root"):
+        tool.run(ToolInput(arguments={"path": "../outside.txt"}))
+
+
+def test_read_tool_rejects_directory_path(tmp_path) -> None:
+    (tmp_path / "folder").mkdir()
+    tool = ReadTool(root=tmp_path)
+
+    with pytest.raises(ToolError, match="directory"):
+        tool.run(ToolInput(arguments={"path": "folder"}))
+
+
+def test_read_tool_rejects_missing_path(tmp_path) -> None:
+    tool = ReadTool(root=tmp_path)
+
+    with pytest.raises(ToolError, match="does not exist"):
+        tool.run(ToolInput(arguments={"path": "missing.txt"}))
+
+
+@pytest.mark.parametrize("field", ["start_line", "max_lines"])
+def test_read_tool_rejects_invalid_line_arguments(tmp_path, field: str) -> None:
+    (tmp_path / "notes.txt").write_text("alpha\n", encoding="utf-8")
+    tool = ReadTool(root=tmp_path)
+
+    with pytest.raises(ToolError, match="positive integer"):
+        tool.run(ToolInput(arguments={"path": "notes.txt", field: 0}))

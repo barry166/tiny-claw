@@ -11,13 +11,21 @@ from tiny_claw._internal.context.builder import ContextBuilder
 from tiny_claw._internal.errors import ToolError
 from tiny_claw._internal.memory.file_store import FileMemoryStore
 from tiny_claw._internal.provider.base import LLMProvider, LLMRequest, ToolChoice
-from tiny_claw._internal.schema.message import Message, ToolCallResult
+from tiny_claw._internal.schema.message import Message, ToolCall, ToolCallResult
 from tiny_claw._internal.tools.registry import ToolRegistry
 
 STOP_REASON_FINAL = "final"
 STOP_REASON_MAX_STEPS_EXHAUSTED = "max_steps_exhausted"
 STOP_REASON_TOOL_POLICY_BLOCKED = "tool_policy_blocked"
 RETURN_PREVIEW_CHARS = 500
+COLOR_RESET = "\033[0m"
+COLOR_DIM = "\033[2m"
+COLOR_BLUE = "\033[34m"
+COLOR_CYAN = "\033[36m"
+COLOR_GREEN = "\033[32m"
+COLOR_MAGENTA = "\033[35m"
+COLOR_RED = "\033[31m"
+COLOR_YELLOW = "\033[33m"
 
 logger = logging.getLogger(__name__)
 
@@ -77,8 +85,8 @@ class MainLoop:
         plan: str | None = None
 
         logger.info(
-            "主循环开始 provider=%s mode=%s max_steps=%s workdir=%s registered_tools=%s "
-            "memories=%s",
+            "%s provider=%s mode=%s max_steps=%s workdir=%s registered_tools=%s memories=%s",
+            _color("主循环开始", COLOR_CYAN),
             self.provider.name,
             mode.value,
             max_steps,
@@ -98,9 +106,15 @@ class MainLoop:
                 registered_tool_definitions if tool_policy is ToolPolicy.AUTO else ()
             )
             if mode is RunMode.PLAN_ACT and phase == "plan":
-                logger.info("规划阶段开始 step=%s/%s visible_tools=0", step, max_steps)
+                logger.info(
+                    "%s step=%s/%s visible_tools=0",
+                    _color("规划阶段开始", COLOR_MAGENTA),
+                    step,
+                    max_steps,
+                )
             logger.info(
-                "发起模型请求 step=%s/%s phase=%s messages=%s tool_choice=%s visible_tools=%s",
+                "%s step=%s/%s phase=%s messages=%s tool_choice=%s visible_tools=%s",
+                _color("发起模型请求", COLOR_BLUE),
                 step,
                 max_steps,
                 phase,
@@ -122,16 +136,28 @@ class MainLoop:
             tool_call_count = len(response.message.tool_calls)
 
             logger.info(
-                "收到模型响应 step=%s provider=%s tool_calls=%s text_chars=%s",
+                "%s step=%s provider=%s tool_calls=%s text_chars=%s",
+                _color("收到模型响应", COLOR_CYAN),
                 step,
                 response.provider,
                 tool_call_count,
                 len(response.text),
             )
+            if response.message.tool_calls:
+                logger.info(
+                    "%s %s",
+                    _color("模型请求调用工具", COLOR_YELLOW),
+                    _format_tool_calls(response.message.tool_calls),
+                )
 
             if mode is RunMode.PLAN_ACT and phase == "plan":
                 plan = last_text
-                logger.info("规划阶段完成 step=%s plan_chars=%s", step, len(plan))
+                logger.info(
+                    "%s step=%s plan_chars=%s",
+                    _color("规划阶段完成", COLOR_MAGENTA),
+                    step,
+                    len(plan),
+                )
 
                 if response.message.tool_calls:
                     logger.warning(
@@ -190,7 +216,8 @@ class MainLoop:
                     )
                 )
                 logger.info(
-                    "进入执行阶段 next_step=%s visible_tools=%s",
+                    "%s next_step=%s visible_tools=%s",
+                    _color("进入执行阶段", COLOR_MAGENTA),
                     step + 1,
                     len(registered_tool_definitions),
                 )
@@ -280,14 +307,22 @@ class MainLoop:
         observations: list[Message] = []
         for tool_call in message.tool_calls:
             try:
-                logger.info("准备调用工具 id=%s name=%s", tool_call.id, tool_call.name)
+                logger.info(
+                    "%s id=%s name=%s args=%s",
+                    _color("准备调用工具", COLOR_YELLOW),
+                    tool_call.id,
+                    _color(tool_call.name, COLOR_YELLOW),
+                    _format_tool_arguments(tool_call.arguments),
+                )
                 output = self.tools.call(tool_call.name, tool_call.arguments)
                 logger.info(
-                    "工具调用完成 id=%s name=%s is_error=%s output_chars=%s",
+                    "%s id=%s name=%s is_error=%s output_chars=%s output_preview=%r",
+                    _color("工具调用完成", COLOR_GREEN),
                     tool_call.id,
-                    tool_call.name,
+                    _color(tool_call.name, COLOR_GREEN),
                     output.is_error,
                     len(output.content),
+                    _preview_text(output.content),
                 )
                 result = ToolCallResult(
                     tool_call_id=tool_call.id,
@@ -297,9 +332,10 @@ class MainLoop:
                 )
             except ToolError as exc:
                 logger.warning(
-                    "工具调用失败 id=%s name=%s error=%s",
+                    "%s id=%s name=%s error=%s",
+                    _color("工具调用失败", COLOR_RED),
                     tool_call.id,
-                    tool_call.name,
+                    _color(tool_call.name, COLOR_RED),
                     exc,
                 )
                 result = ToolCallResult(
@@ -345,7 +381,8 @@ def _tool_policy_for_phase(phase: str) -> ToolPolicy:
 
 def _log_run_return(*, text: str, provider: str, stop_reason: str) -> None:
     logger.info(
-        "主循环返回 provider=%s reason=%s text_chars=%s text_preview=%r",
+        "%s provider=%s reason=%s text_chars=%s text_preview=%r",
+        _color("主循环返回", COLOR_GREEN),
         provider,
         stop_reason,
         len(text),
@@ -353,8 +390,26 @@ def _log_run_return(*, text: str, provider: str, stop_reason: str) -> None:
     )
 
 
+def _format_tool_calls(tool_calls: tuple[ToolCall, ...]) -> str:
+    if not tool_calls:
+        return "none"
+    return ", ".join(
+        f"{_color(call.name, COLOR_YELLOW)}"
+        f"(id={call.id}, args={_format_tool_arguments(call.arguments)})"
+        for call in tool_calls
+    )
+
+
+def _format_tool_arguments(arguments: object) -> str:
+    return _color(_preview_text(str(arguments)), COLOR_DIM)
+
+
 def _preview_text(text: str) -> str:
     normalized = text.replace("\n", "\\n")
     if len(normalized) <= RETURN_PREVIEW_CHARS:
         return normalized
     return normalized[:RETURN_PREVIEW_CHARS] + "...<truncated>"
+
+
+def _color(text: object, color: str) -> str:
+    return f"{color}{text}{COLOR_RESET}"

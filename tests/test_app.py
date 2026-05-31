@@ -46,3 +46,11 @@ def test_application_passes_openai_base_url(tmp_path) -> None:
     app = build_application(settings)
 
     assert app.settings.openai_base_url == "https://openai.example/v1"
+
+
+def test_application_registers_read_tool(tmp_path) -> None:
+    settings = Settings.from_env({"TINY_CLAW_STATE_DIR": str(tmp_path)})
+
+    app = build_application(settings)
+
+    assert "read" in app.health().tools
