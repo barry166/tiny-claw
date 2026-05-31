@@ -91,13 +91,19 @@ uv run python -m tiny_claw --help
 - `TINY_CLAW_LOG_LEVEL`：`DEBUG`、`INFO`、`WARNING`、`ERROR` 或 `CRITICAL`，默认
   `INFO`。
 - `TINY_CLAW_PROVIDER`：provider 名称，默认 `echo`。
-- `TINY_CLAW_MODEL`：模型名称，默认等于 provider 名称。
+- `TINY_CLAW_PROVIDER` 支持 `echo`、`openai`、`claude`、`anthropic`。
+- `TINY_CLAW_MODEL`：模型名称；OpenAI 默认 `gpt-5.4`，Claude 默认
+  `claude-sonnet-4-20250514`，其他 provider 默认等于 provider 名称。
+- `TINY_CLAW_MAX_TOKENS`：模型最大输出 token，默认 `1024`。
 - `TINY_CLAW_STATE_DIR`：记忆 / 状态目录，默认 `~/.tiny-claw`。
-- `TINY_CLAW_OPENAI_API_KEY`：预留给未来 OpenAI provider 适配器。
+- `OPENAI_API_KEY` 或 `OPENAI_KEY`：`openai` provider 必需。
+- `OPENAI_BASE_URL`：可选 OpenAI-compatible API base URL。
+- `ANTHROPIC_API_KEY` 或 `CLAUDE_KEY`：`claude` / `anthropic` provider 必需。
+
+CLI 会读取当前执行目录下的 `.env` 文件，真实环境变量优先级高于 `.env`。
+`.env` 包含密钥，必须保持在 git ignore 中。
 
 ## 当前 Provider 策略
 
-默认 `echo` provider 故意保持零运行时依赖，确保框架在没有 API key 的情况下也能运行。
-
-`src/tiny_claw/_internal/provider/openai.py` 当前只是预留适配层。除非用户明确要求真实模型接入，
-不要在这里接入 OpenAI SDK 或引入相关运行时依赖。
+默认 `echo` provider 保持无 API key 可运行。`openai` 和 `claude` provider 使用官方 SDK，
+不同厂商的请求 / 响应结构转换应收敛在 `provider/` 适配层，`engine` 不应依赖具体厂商。

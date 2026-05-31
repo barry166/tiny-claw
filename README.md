@@ -50,7 +50,14 @@ uv run pytest
 
 - `TINY_CLAW_LOG_LEVEL`: one of `DEBUG`, `INFO`, `WARNING`, `ERROR`,
   `CRITICAL`; defaults to `INFO`.
-- `TINY_CLAW_PROVIDER`: provider name; defaults to `echo`.
-- `TINY_CLAW_MODEL`: provider model name; defaults to `echo`.
+- `TINY_CLAW_PROVIDER`: `echo`, `openai`, `claude`, or `anthropic`; defaults to `echo`.
+- `TINY_CLAW_MODEL`: provider model name; defaults to `gpt-5.4` for OpenAI,
+  `claude-sonnet-4-20250514` for Claude, otherwise the provider name.
+- `TINY_CLAW_MAX_TOKENS`: maximum model output tokens; defaults to `1024`.
 - `TINY_CLAW_STATE_DIR`: memory/state directory; defaults to `~/.tiny-claw`.
-- `TINY_CLAW_OPENAI_API_KEY`: reserved for the future OpenAI provider adapter.
+- `OPENAI_API_KEY` or `OPENAI_KEY`: required for `TINY_CLAW_PROVIDER=openai`.
+- `OPENAI_BASE_URL`: optional OpenAI-compatible API base URL.
+- `ANTHROPIC_API_KEY` or `CLAUDE_KEY`: required for `TINY_CLAW_PROVIDER=claude`.
+
+When using the CLI, values in a local `.env` file are loaded before process
+environment variables; real environment variables take precedence.

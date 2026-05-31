@@ -10,6 +10,7 @@ from tiny_claw._internal.engine.main_loop import MainLoop, RunMode, RunResult
 from tiny_claw._internal.errors import ConfigurationError
 from tiny_claw._internal.memory.file_store import FileMemoryStore
 from tiny_claw._internal.provider.base import LLMProvider
+from tiny_claw._internal.provider.claude import ClaudeProvider
 from tiny_claw._internal.provider.echo import EchoProvider
 from tiny_claw._internal.provider.openai import OpenAIProvider
 from tiny_claw._internal.settings import Settings
@@ -81,7 +82,18 @@ def _build_provider(settings: Settings) -> LLMProvider:
     if provider_name == "echo":
         return EchoProvider(model=settings.model)
     if provider_name == "openai":
-        return OpenAIProvider(api_key=settings.openai_api_key, model=settings.model)
+        return OpenAIProvider(
+            api_key=settings.openai_api_key,
+            model=settings.model,
+            max_tokens=settings.max_tokens,
+            base_url=settings.openai_base_url,
+        )
+    if provider_name in {"claude", "anthropic"}:
+        return ClaudeProvider(
+            api_key=settings.claude_api_key,
+            model=settings.model,
+            max_tokens=settings.max_tokens,
+        )
     raise ConfigurationError(f"Unsupported provider: {settings.provider_name}")
 
 

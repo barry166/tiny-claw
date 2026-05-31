@@ -198,7 +198,7 @@ def test_main_loop_plan_act_plans_then_exposes_tools(tmp_path) -> None:
         for message in provider.requests[1].messages
     )
     assert any(
-        message.role is Role.SYSTEM and "进入执行阶段" in message.content
+        message.role is Role.USER and "进入执行阶段" in message.content
         for message in provider.requests[1].messages
     )
 

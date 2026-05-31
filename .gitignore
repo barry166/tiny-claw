@@ -26,6 +26,8 @@ dist/
 *.egg
 
 # Local runtime state
+.env
+.env.*
 .tmp-state/
 .tiny-claw/
 .omx/

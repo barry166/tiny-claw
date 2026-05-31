@@ -9,7 +9,10 @@ description = "An industrial Python CLI framework skeleton."
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "Tiny Claw Authors" }]
-dependencies = []
+dependencies = [
+    "anthropic>=0.104,<1",
+    "openai>=2.38,<3",
+]
 
 [project.scripts]
 tiny-claw = "tiny_claw.cli:main"

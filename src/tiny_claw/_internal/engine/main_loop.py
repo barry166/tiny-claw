@@ -17,6 +17,7 @@ from tiny_claw._internal.tools.registry import ToolRegistry
 STOP_REASON_FINAL = "final"
 STOP_REASON_MAX_STEPS_EXHAUSTED = "max_steps_exhausted"
 STOP_REASON_TOOL_POLICY_BLOCKED = "tool_policy_blocked"
+RETURN_PREVIEW_CHARS = 500
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +139,11 @@ class MainLoop:
                         tool_call_count,
                     )
                     self._record_run(prompt=prompt, response=last_text)
+                    _log_run_return(
+                        text=last_text,
+                        provider=last_provider,
+                        stop_reason=STOP_REASON_TOOL_POLICY_BLOCKED,
+                    )
                     return RunResult(
                         text=last_text,
                         provider=last_provider,
@@ -160,6 +166,11 @@ class MainLoop:
                         mode.value,
                         phase,
                     )
+                    _log_run_return(
+                        text=last_text,
+                        provider=last_provider,
+                        stop_reason=STOP_REASON_MAX_STEPS_EXHAUSTED,
+                    )
                     return RunResult(
                         text=last_text,
                         provider=last_provider,
@@ -173,7 +184,7 @@ class MainLoop:
                     )
 
                 messages.append(
-                    Message.system(
+                    Message.user(
                         "规划阶段已完成。请基于上一条 assistant 计划进入执行阶段；"
                         "如需要，可使用已提供的工具，并在每次工具结果后继续推理。"
                     )
@@ -197,6 +208,11 @@ class MainLoop:
                     phase,
                     tool_policy.value,
                 )
+                _log_run_return(
+                    text=last_text,
+                    provider=last_provider,
+                    stop_reason=STOP_REASON_FINAL,
+                )
                 return RunResult(
                     text=last_text,
                     provider=last_provider,
@@ -215,6 +231,11 @@ class MainLoop:
                     tool_call_count,
                 )
                 self._record_run(prompt=prompt, response=last_text)
+                _log_run_return(
+                    text=last_text,
+                    provider=last_provider,
+                    stop_reason=STOP_REASON_TOOL_POLICY_BLOCKED,
+                )
                 return RunResult(
                     text=last_text,
                     provider=last_provider,
@@ -237,6 +258,11 @@ class MainLoop:
             last_provider,
             mode.value,
             tool_policy.value,
+        )
+        _log_run_return(
+            text=last_text,
+            provider=last_provider,
+            stop_reason=STOP_REASON_MAX_STEPS_EXHAUSTED,
         )
         return RunResult(
             text=last_text,
@@ -315,3 +341,20 @@ def _tool_policy_for_phase(phase: str) -> ToolPolicy:
     if phase in {"think", "plan"}:
         return ToolPolicy.NONE
     return ToolPolicy.AUTO
+
+
+def _log_run_return(*, text: str, provider: str, stop_reason: str) -> None:
+    logger.info(
+        "主循环返回 provider=%s reason=%s text_chars=%s text_preview=%r",
+        provider,
+        stop_reason,
+        len(text),
+        _preview_text(text),
+    )
+
+
+def _preview_text(text: str) -> str:
+    normalized = text.replace("\n", "\\n")
+    if len(normalized) <= RETURN_PREVIEW_CHARS:
+        return normalized
+    return normalized[:RETURN_PREVIEW_CHARS] + "...<truncated>"
