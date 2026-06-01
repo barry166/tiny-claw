@@ -60,10 +60,10 @@ def test_application_registers_explicitly_enabled_tools(tmp_path) -> None:
     settings = Settings.from_env(
         {
             "TINY_CLAW_STATE_DIR": str(tmp_path),
-            "TINY_CLAW_ENABLED_TOOLS": "read,write,bash",
+            "TINY_CLAW_ENABLED_TOOLS": "read,write,bash,edit",
         }
     )
 
     app = build_application(settings)
 
-    assert app.health().tools == ("bash", "read", "write")
+    assert app.health().tools == ("bash", "edit", "read", "write")

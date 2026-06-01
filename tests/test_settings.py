@@ -26,9 +26,9 @@ def test_settings_defaults_to_read_tool_only() -> None:
 
 
 def test_settings_reads_enabled_tools_from_environment() -> None:
-    settings = Settings.from_env({"TINY_CLAW_ENABLED_TOOLS": "read,write,bash,read"})
+    settings = Settings.from_env({"TINY_CLAW_ENABLED_TOOLS": "read,write,bash,edit,read"})
 
-    assert settings.enabled_tools == ("bash", "read", "write")
+    assert settings.enabled_tools == ("bash", "edit", "read", "write")
 
 
 def test_settings_rejects_unknown_enabled_tool() -> None:

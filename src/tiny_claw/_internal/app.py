@@ -16,6 +16,7 @@ from tiny_claw._internal.provider.openai import OpenAIProvider
 from tiny_claw._internal.settings import Settings
 from tiny_claw._internal.tools.base import Tool
 from tiny_claw._internal.tools.builtin.bash import BashTool
+from tiny_claw._internal.tools.builtin.edit import EditTool
 from tiny_claw._internal.tools.builtin.read import ReadTool
 from tiny_claw._internal.tools.builtin.write import WriteTool
 from tiny_claw._internal.tools.registry import ToolRegistry
@@ -108,6 +109,7 @@ def _build_tool_registry(
     registry = ToolRegistry()
     available_tools: dict[str, Tool] = {
         "bash": BashTool(workdir=resolved_workdir),
+        "edit": EditTool(root=resolved_workdir),
         "read": ReadTool(root=resolved_workdir),
         "write": WriteTool(root=resolved_workdir),
     }

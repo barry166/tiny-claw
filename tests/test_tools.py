@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import stat
 from typing import Any
 
 import pytest
@@ -142,11 +143,246 @@ def test_bash_tool_truncates_long_output(tmp_path) -> None:
     assert "<truncated" in result.output
 
 
+def test_edit_tool_replaces_exact_text_inside_root(tmp_path) -> None:
+    (tmp_path / "notes.txt").write_text("alpha\nbeta\ngamma\n", encoding="utf-8")
+    tool = EditTool(root=tmp_path)
+
+    result = tool.run(
+        ToolInput(arguments={"path": "notes.txt", "old_text": "beta", "new_text": "bravo"})
+    )
+
+    assert (tmp_path / "notes.txt").read_text(encoding="utf-8") == "alpha\nbravo\ngamma\n"
+    assert "strategy=exact" in result.output
+    assert "replacements=1" in result.output
+    assert "start_line=2" in result.output
+    assert "2: bravo" in result.output
+
+
+def test_edit_tool_replaces_multiline_text(tmp_path) -> None:
+    (tmp_path / "notes.txt").write_text("one\ntwo\nthree\nfour\n", encoding="utf-8")
+    tool = EditTool(root=tmp_path)
+
+    tool.run(
+        ToolInput(
+            arguments={
+                "path": "notes.txt",
+                "old_text": "two\nthree",
+                "new_text": "dos\ntres",
+            }
+        )
+    )
+
+    assert (tmp_path / "notes.txt").read_text(encoding="utf-8") == "one\ndos\ntres\nfour\n"
+
+
+def test_edit_tool_deletes_text_with_empty_new_text(tmp_path) -> None:
+    (tmp_path / "notes.txt").write_text("alpha\nremove me\ngamma\n", encoding="utf-8")
+    tool = EditTool(root=tmp_path)
+
+    result = tool.run(
+        ToolInput(arguments={"path": "notes.txt", "old_text": "remove me\n", "new_text": ""})
+    )
+
+    assert (tmp_path / "notes.txt").read_text(encoding="utf-8") == "alpha\ngamma\n"
+    assert "new_bytes=0" in result.output
+
+
+def test_edit_tool_matches_normalized_newlines_and_preserves_file_style(tmp_path) -> None:
+    (tmp_path / "notes.txt").write_text("alpha\r\nbeta\r\ngamma\r\n", encoding="utf-8")
+    tool = EditTool(root=tmp_path)
+
+    result = tool.run(
+        ToolInput(
+            arguments={
+                "path": "notes.txt",
+                "old_text": "beta\ngamma",
+                "new_text": "bravo\ncharlie",
+            }
+        )
+    )
+
+    assert (tmp_path / "notes.txt").read_bytes() == b"alpha\r\nbravo\r\ncharlie\r\n"
+    assert "strategy=newline_normalized" in result.output
+
+
+def test_edit_tool_matches_trimmed_old_text(tmp_path) -> None:
+    (tmp_path / "notes.txt").write_text("alpha\nbeta\ngamma\n", encoding="utf-8")
+    tool = EditTool(root=tmp_path)
+
+    result = tool.run(
+        ToolInput(arguments={"path": "notes.txt", "old_text": "\n beta ", "new_text": "bravo"})
+    )
+
+    assert (tmp_path / "notes.txt").read_text(encoding="utf-8") == "alpha\nbravo\ngamma\n"
+    assert "strategy=trim_space" in result.output
+
+
+def test_edit_tool_matches_line_by_line_normalized_text(tmp_path) -> None:
+    (tmp_path / "notes.py").write_text(
+        "def main():\n    if ready:\n        print('one')\n        print('two')\n",
+        encoding="utf-8",
+    )
+    tool = EditTool(root=tmp_path)
+
+    result = tool.run(
+        ToolInput(
+            arguments={
+                "path": "notes.py",
+                "old_text": "print('one')\nprint('two')",
+                "new_text": "        print('uno')\n        print('dos')",
+            }
+        )
+    )
+
+    assert (tmp_path / "notes.py").read_text(encoding="utf-8") == (
+        "def main():\n    if ready:\n        print('uno')\n        print('dos')\n"
+    )
+    assert "strategy=line_by_line_normalized" in result.output
+
+
+def test_edit_tool_preserves_indent_for_unindented_replacement(tmp_path) -> None:
+    (tmp_path / "notes.py").write_text(
+        "def main():\n    if ready:\n        print('one')\n        print('two')\n",
+        encoding="utf-8",
+    )
+    tool = EditTool(root=tmp_path)
+
+    result = tool.run(
+        ToolInput(
+            arguments={
+                "path": "notes.py",
+                "old_text": "print('one')\nprint('two')",
+                "new_text": "print('uno')\nprint('dos')",
+            }
+        )
+    )
+
+    assert (tmp_path / "notes.py").read_text(encoding="utf-8") == (
+        "def main():\n    if ready:\n        print('uno')\n        print('dos')\n"
+    )
+    assert "strategy=line_by_line_normalized" in result.output
+
+
+def test_edit_tool_uses_literal_indent_when_tabs_and_spaces_are_mixed(tmp_path) -> None:
+    (tmp_path / "notes.py").write_text(
+        "def main():\n\tprint('tab')\n    print('space')\n",
+        encoding="utf-8",
+    )
+    tool = EditTool(root=tmp_path)
+
+    with pytest.raises(ToolError, match="could not find old_text"):
+        tool.run(
+            ToolInput(
+                arguments={
+                    "path": "notes.py",
+                    "old_text": "print('tab')\nprint('space')",
+                    "new_text": "print('uno')\nprint('dos')",
+                }
+            )
+        )
+
+
+def test_edit_tool_preserves_file_mode(tmp_path) -> None:
+    script = tmp_path / "run.sh"
+    script.write_text("#!/bin/sh\necho old\n", encoding="utf-8")
+    script.chmod(0o755)
+    tool = EditTool(root=tmp_path)
+
+    tool.run(ToolInput(arguments={"path": "run.sh", "old_text": "old", "new_text": "new"}))
+
+    assert stat.S_IMODE(script.stat().st_mode) == 0o755
+    assert script.read_text(encoding="utf-8") == "#!/bin/sh\necho new\n"
+
+
 def test_edit_tool_rejects_paths_outside_root(tmp_path) -> None:
-    tool = EditTool(root=tmp_path, enabled=True)
+    tool = EditTool(root=tmp_path)
 
     with pytest.raises(ToolError, match="under the configured root"):
-        tool.run(ToolInput(arguments={"path": "../outside.txt", "content": "nope"}))
+        tool.run(
+            ToolInput(arguments={"path": "../outside.txt", "old_text": "old", "new_text": "new"})
+        )
+
+
+def test_edit_tool_rejects_absolute_path(tmp_path) -> None:
+    tool = EditTool(root=tmp_path)
+
+    with pytest.raises(ToolError, match="relative path"):
+        tool.run(
+            ToolInput(
+                arguments={
+                    "path": str(tmp_path / "notes.txt"),
+                    "old_text": "old",
+                    "new_text": "new",
+                }
+            )
+        )
+
+
+def test_edit_tool_rejects_missing_path(tmp_path) -> None:
+    tool = EditTool(root=tmp_path)
+
+    with pytest.raises(ToolError, match="does not exist"):
+        tool.run(ToolInput(arguments={"path": "missing.txt", "old_text": "old", "new_text": "new"}))
+
+
+def test_edit_tool_rejects_directory_path(tmp_path) -> None:
+    (tmp_path / "folder").mkdir()
+    tool = EditTool(root=tmp_path)
+
+    with pytest.raises(ToolError, match="directory"):
+        tool.run(ToolInput(arguments={"path": "folder", "old_text": "old", "new_text": "new"}))
+
+
+def test_edit_tool_rejects_empty_old_text(tmp_path) -> None:
+    (tmp_path / "notes.txt").write_text("alpha\n", encoding="utf-8")
+    tool = EditTool(root=tmp_path)
+
+    with pytest.raises(ToolError, match="old_text"):
+        tool.run(ToolInput(arguments={"path": "notes.txt", "old_text": "", "new_text": "new"}))
+
+
+def test_edit_tool_rejects_no_op_replacement(tmp_path) -> None:
+    (tmp_path / "notes.txt").write_text("alpha\n", encoding="utf-8")
+    tool = EditTool(root=tmp_path)
+
+    with pytest.raises(ToolError, match="different"):
+        tool.run(
+            ToolInput(arguments={"path": "notes.txt", "old_text": "alpha", "new_text": "alpha"})
+        )
+
+
+def test_edit_tool_rejects_missing_match(tmp_path) -> None:
+    (tmp_path / "notes.txt").write_text("alpha\n", encoding="utf-8")
+    tool = EditTool(root=tmp_path)
+
+    with pytest.raises(ToolError, match="could not find old_text"):
+        tool.run(ToolInput(arguments={"path": "notes.txt", "old_text": "beta", "new_text": "new"}))
+
+
+def test_edit_tool_hints_when_old_text_contains_read_line_numbers(tmp_path) -> None:
+    (tmp_path / "notes.txt").write_text("alpha\n", encoding="utf-8")
+    tool = EditTool(root=tmp_path)
+
+    with pytest.raises(ToolError, match="line number prefixes"):
+        tool.run(
+            ToolInput(arguments={"path": "notes.txt", "old_text": "1: alpha", "new_text": "new"})
+        )
+
+
+def test_edit_tool_rejects_multiple_matches(tmp_path) -> None:
+    (tmp_path / "notes.txt").write_text("line\nline\n", encoding="utf-8")
+    tool = EditTool(root=tmp_path)
+
+    with pytest.raises(ToolError, match=r"lines \[1, 2\]"):
+        tool.run(ToolInput(arguments={"path": "notes.txt", "old_text": "line", "new_text": "new"}))
+
+
+def test_edit_tool_rejects_non_utf8_file(tmp_path) -> None:
+    (tmp_path / "binary.dat").write_bytes(b"\xff\xfe\xfd")
+    tool = EditTool(root=tmp_path)
+
+    with pytest.raises(ToolError, match="UTF-8"):
+        tool.run(ToolInput(arguments={"path": "binary.dat", "old_text": "old", "new_text": "new"}))
 
 
 def test_write_tool_writes_file_inside_root(tmp_path) -> None:

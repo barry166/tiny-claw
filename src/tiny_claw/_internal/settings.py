@@ -16,7 +16,7 @@ DEFAULT_MAX_TOKENS = 1024
 DEFAULT_OPENAI_MODEL = "gpt-5.4"
 DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-20250514"
 DEFAULT_ENABLED_TOOLS = ("read",)
-SUPPORTED_TOOLS = {"bash", "read", "write"}
+SUPPORTED_TOOLS = {"bash", "edit", "read", "write"}
 
 
 @dataclass(frozen=True)

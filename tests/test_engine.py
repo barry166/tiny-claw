@@ -17,6 +17,7 @@ from tiny_claw._internal.provider.base import LLMRequest, LLMResponse, ToolChoic
 from tiny_claw._internal.schema.message import Message, Role, ToolCall, ToolDefinition
 from tiny_claw._internal.tools.base import ToolInput, ToolOutput
 from tiny_claw._internal.tools.builtin.bash import BashTool
+from tiny_claw._internal.tools.builtin.edit import EditTool
 from tiny_claw._internal.tools.builtin.read import ReadTool
 from tiny_claw._internal.tools.builtin.write import WriteTool
 from tiny_claw._internal.tools.registry import ToolRegistry
@@ -205,6 +206,36 @@ def test_main_loop_can_write_file_then_return_summary(tmp_path) -> None:
         and message.tool_call_id == "call-write-1"
         and message.name == "write"
         and "mode=overwrite" in message.content
+        for message in provider.requests[1].messages
+    )
+
+
+def test_main_loop_can_edit_file_then_return_summary(tmp_path) -> None:
+    (tmp_path / "notes.txt").write_text("alpha\nbeta\ngamma\n", encoding="utf-8")
+    edit_call = ToolCall(
+        id="call-edit-1",
+        name="edit",
+        arguments={"path": "notes.txt", "old_text": "beta", "new_text": "bravo"},
+    )
+    provider = FakeProvider(
+        responses=[
+            Message.assistant(tool_calls=(edit_call,)),
+            Message.assistant("notes.txt 已经局部替换。"),
+        ]
+    )
+    tools = ToolRegistry()
+    tools.register(EditTool(root=tmp_path))
+    engine = _build_engine(provider=provider, tools=tools, workdir=tmp_path)
+
+    result = engine.run(prompt="替换 notes.txt", max_steps=2)
+
+    assert result.text == "notes.txt 已经局部替换。"
+    assert (tmp_path / "notes.txt").read_text(encoding="utf-8") == "alpha\nbravo\ngamma\n"
+    assert any(
+        message.role is Role.TOOL
+        and message.tool_call_id == "call-edit-1"
+        and message.name == "edit"
+        and "strategy=exact" in message.content
         for message in provider.requests[1].messages
     )
 
