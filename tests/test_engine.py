@@ -240,6 +240,64 @@ def test_main_loop_can_edit_file_then_return_summary(tmp_path) -> None:
     )
 
 
+def test_main_loop_can_read_then_edit_existing_code_file(tmp_path) -> None:
+    source = 'def greet(name: str) -> str:\n    message = f"Hello, {name}!"\n    return message\n'
+    (tmp_path / "greeting.py").write_text(source, encoding="utf-8")
+    read_call = ToolCall(
+        id="call-read-greeting",
+        name="read",
+        arguments={"path": "greeting.py", "start_line": 1, "max_lines": 20},
+    )
+    edit_call = ToolCall(
+        id="call-edit-greeting",
+        name="edit",
+        arguments={
+            "path": "greeting.py",
+            "old_text": 'message = f"Hello, {name}!"\nreturn message',
+            "new_text": 'message = f"Hi, {name}!"\nreturn message.upper()',
+        },
+    )
+    provider = FakeProvider(
+        responses=[
+            Message.assistant(tool_calls=(read_call,)),
+            Message.assistant(tool_calls=(edit_call,)),
+            Message.assistant("greeting.py 已读取并完成局部替换。"),
+        ]
+    )
+    tools = ToolRegistry()
+    tools.register(ReadTool(root=tmp_path))
+    tools.register(EditTool(root=tmp_path))
+    engine = _build_engine(provider=provider, tools=tools, workdir=tmp_path)
+
+    result = engine.run(prompt="读取 greeting.py 并把问候语改成 Hi", max_steps=3)
+
+    assert result.text == "greeting.py 已读取并完成局部替换。"
+    assert result.stop_reason == STOP_REASON_FINAL
+    assert result.steps == 3
+    assert (tmp_path / "greeting.py").read_text(encoding="utf-8") == (
+        'def greet(name: str) -> str:\n    message = f"Hi, {name}!"\n    return message.upper()\n'
+    )
+    assert provider.requests[0].tools == (
+        EditTool(root=tmp_path).definition(),
+        ReadTool(root=tmp_path).definition(),
+    )
+    assert any(
+        message.role is Role.TOOL
+        and message.tool_call_id == "call-read-greeting"
+        and message.name == "read"
+        and '2:     message = f"Hello, {name}!"' in message.content
+        for message in provider.requests[1].messages
+    )
+    assert any(
+        message.role is Role.TOOL
+        and message.tool_call_id == "call-edit-greeting"
+        and message.name == "edit"
+        and "strategy=line_by_line_normalized" in message.content
+        and '2:     message = f"Hi, {name}!"' in message.content
+        for message in provider.requests[2].messages
+    )
+
+
 def test_main_loop_returns_bash_error_observation_for_self_correction(tmp_path) -> None:
     bash_call = ToolCall(
         id="call-bash-1",
