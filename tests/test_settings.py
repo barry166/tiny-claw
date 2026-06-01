@@ -19,6 +19,23 @@ def test_settings_reads_workdir_from_environment(tmp_path) -> None:
     assert settings.workdir == tmp_path.resolve()
 
 
+def test_settings_defaults_to_read_tool_only() -> None:
+    settings = Settings.from_env({})
+
+    assert settings.enabled_tools == ("read",)
+
+
+def test_settings_reads_enabled_tools_from_environment() -> None:
+    settings = Settings.from_env({"TINY_CLAW_ENABLED_TOOLS": "read,write,bash,read"})
+
+    assert settings.enabled_tools == ("bash", "read", "write")
+
+
+def test_settings_rejects_unknown_enabled_tool() -> None:
+    with pytest.raises(ConfigurationError, match="ENABLED_TOOLS"):
+        Settings.from_env({"TINY_CLAW_ENABLED_TOOLS": "read,unknown"})
+
+
 def test_settings_reads_provider_specific_defaults_and_keys() -> None:
     openai_settings = Settings.from_env(
         {

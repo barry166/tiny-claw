@@ -14,9 +14,10 @@ from tiny_claw._internal.provider.claude import ClaudeProvider
 from tiny_claw._internal.provider.echo import EchoProvider
 from tiny_claw._internal.provider.openai import OpenAIProvider
 from tiny_claw._internal.settings import Settings
+from tiny_claw._internal.tools.base import Tool
 from tiny_claw._internal.tools.builtin.bash import BashTool
-from tiny_claw._internal.tools.builtin.edit import EditTool
 from tiny_claw._internal.tools.builtin.read import ReadTool
+from tiny_claw._internal.tools.builtin.write import WriteTool
 from tiny_claw._internal.tools.registry import ToolRegistry
 
 
@@ -67,7 +68,7 @@ class Application:
 def build_application(settings: Settings) -> Application:
     provider = _build_provider(settings)
     memory = FileMemoryStore(settings.state_dir)
-    tools = _build_tool_registry(settings.workdir)
+    tools = _build_tool_registry(settings.workdir, enabled_tools=settings.enabled_tools)
     engine = MainLoop(
         provider=provider,
         context_builder=ContextBuilder(),
@@ -98,10 +99,18 @@ def _build_provider(settings: Settings) -> LLMProvider:
     raise ConfigurationError(f"Unsupported provider: {settings.provider_name}")
 
 
-def _build_tool_registry(workdir: Path | None = None) -> ToolRegistry:
+def _build_tool_registry(
+    workdir: Path | None = None,
+    *,
+    enabled_tools: tuple[str, ...] = ("read",),
+) -> ToolRegistry:
     resolved_workdir = Path.cwd().resolve() if workdir is None else workdir.resolve()
     registry = ToolRegistry()
-    registry.register(BashTool(workdir=resolved_workdir, enabled=False))
-    registry.register(EditTool(root=resolved_workdir, enabled=False))
-    registry.register(ReadTool(root=resolved_workdir))
+    available_tools: dict[str, Tool] = {
+        "bash": BashTool(workdir=resolved_workdir),
+        "read": ReadTool(root=resolved_workdir),
+        "write": WriteTool(root=resolved_workdir),
+    }
+    for name in enabled_tools:
+        registry.register(available_tools[name])
     return registry

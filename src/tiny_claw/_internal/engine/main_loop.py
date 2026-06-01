@@ -8,24 +8,16 @@ from enum import StrEnum
 from pathlib import Path
 
 from tiny_claw._internal.context.builder import ContextBuilder
+from tiny_claw._internal.engine import log_view
 from tiny_claw._internal.errors import ToolError
 from tiny_claw._internal.memory.file_store import FileMemoryStore
 from tiny_claw._internal.provider.base import LLMProvider, LLMRequest, ToolChoice
-from tiny_claw._internal.schema.message import Message, ToolCall, ToolCallResult
+from tiny_claw._internal.schema.message import Message, ToolCallResult
 from tiny_claw._internal.tools.registry import ToolRegistry
 
 STOP_REASON_FINAL = "final"
 STOP_REASON_MAX_STEPS_EXHAUSTED = "max_steps_exhausted"
 STOP_REASON_TOOL_POLICY_BLOCKED = "tool_policy_blocked"
-RETURN_PREVIEW_CHARS = 500
-COLOR_RESET = "\033[0m"
-COLOR_DIM = "\033[2m"
-COLOR_BLUE = "\033[34m"
-COLOR_CYAN = "\033[36m"
-COLOR_GREEN = "\033[32m"
-COLOR_MAGENTA = "\033[35m"
-COLOR_RED = "\033[31m"
-COLOR_YELLOW = "\033[33m"
 
 logger = logging.getLogger(__name__)
 
@@ -84,15 +76,14 @@ class MainLoop:
         last_provider = self.provider.name
         plan: str | None = None
 
-        logger.info(
-            "%s provider=%s mode=%s max_steps=%s workdir=%s registered_tools=%s memories=%s",
-            _color("主循环开始", COLOR_CYAN),
-            self.provider.name,
-            mode.value,
-            max_steps,
-            self.workdir,
-            len(registered_tool_definitions),
-            len(recent_memory),
+        log_view.log_run_start(
+            logger,
+            provider=self.provider.name,
+            mode=mode.value,
+            max_steps=max_steps,
+            workdir=self.workdir,
+            registered_tools=len(registered_tool_definitions),
+            memories=len(recent_memory),
         )
         if mode is RunMode.THINK:
             logger.info("思考模式已启用：本次请求不会向模型暴露工具定义，也不会执行工具调用")
@@ -105,22 +96,18 @@ class MainLoop:
             request_tool_definitions = (
                 registered_tool_definitions if tool_policy is ToolPolicy.AUTO else ()
             )
+            log_view.log_turn_start(logger, step=step, max_steps=max_steps, phase=phase)
             if mode is RunMode.PLAN_ACT and phase == "plan":
                 logger.info(
-                    "%s step=%s/%s visible_tools=0",
-                    _color("规划阶段开始", COLOR_MAGENTA),
+                    "[Plan] 规划阶段开始 step=%s/%s visible_tools=0",
                     step,
                     max_steps,
                 )
-            logger.info(
-                "%s step=%s/%s phase=%s messages=%s tool_choice=%s visible_tools=%s",
-                _color("发起模型请求", COLOR_BLUE),
-                step,
-                max_steps,
-                phase,
-                len(messages),
-                _to_tool_choice(tool_policy).value,
-                len(request_tool_definitions),
+            log_view.log_model_request(
+                logger,
+                messages=len(messages),
+                tool_choice=_to_tool_choice(tool_policy).value,
+                visible_tools=len(request_tool_definitions),
             )
             response = self.provider.complete(
                 LLMRequest(
@@ -135,26 +122,17 @@ class MainLoop:
             last_provider = response.provider
             tool_call_count = len(response.message.tool_calls)
 
-            logger.info(
-                "%s step=%s provider=%s tool_calls=%s text_chars=%s",
-                _color("收到模型响应", COLOR_CYAN),
-                step,
-                response.provider,
-                tool_call_count,
-                len(response.text),
+            log_view.log_model_response(
+                logger,
+                provider=response.provider,
+                tool_calls=response.message.tool_calls,
+                text=response.text,
             )
-            if response.message.tool_calls:
-                logger.info(
-                    "%s %s",
-                    _color("模型请求调用工具", COLOR_YELLOW),
-                    _format_tool_calls(response.message.tool_calls),
-                )
 
             if mode is RunMode.PLAN_ACT and phase == "plan":
                 plan = last_text
                 logger.info(
-                    "%s step=%s plan_chars=%s",
-                    _color("规划阶段完成", COLOR_MAGENTA),
+                    "[Plan] 规划阶段完成 step=%s plan_chars=%s",
                     step,
                     len(plan),
                 )
@@ -165,7 +143,8 @@ class MainLoop:
                         tool_call_count,
                     )
                     self._record_run(prompt=prompt, response=last_text)
-                    _log_run_return(
+                    log_view.log_run_return(
+                        logger,
                         text=last_text,
                         provider=last_provider,
                         stop_reason=STOP_REASON_TOOL_POLICY_BLOCKED,
@@ -192,7 +171,18 @@ class MainLoop:
                         mode.value,
                         phase,
                     )
-                    _log_run_return(
+                    log_view.log_run_complete(
+                        logger,
+                        provider=last_provider,
+                        stop_reason=STOP_REASON_MAX_STEPS_EXHAUSTED,
+                        steps=step,
+                        max_steps=max_steps,
+                        mode=mode.value,
+                        phase=phase,
+                        tool_policy=tool_policy.value,
+                    )
+                    log_view.log_run_return(
+                        logger,
                         text=last_text,
                         provider=last_provider,
                         stop_reason=STOP_REASON_MAX_STEPS_EXHAUSTED,
@@ -216,8 +206,7 @@ class MainLoop:
                     )
                 )
                 logger.info(
-                    "%s next_step=%s visible_tools=%s",
-                    _color("进入执行阶段", COLOR_MAGENTA),
+                    "[Plan] 进入执行阶段 next_step=%s visible_tools=%s",
                     step + 1,
                     len(registered_tool_definitions),
                 )
@@ -225,17 +214,18 @@ class MainLoop:
 
             if not response.message.tool_calls:
                 self._record_run(prompt=prompt, response=last_text)
-                logger.info(
-                    "主循环结束 reason=%s steps=%s/%s provider=%s mode=%s phase=%s tool_policy=%s",
-                    STOP_REASON_FINAL,
-                    step,
-                    max_steps,
-                    last_provider,
-                    mode.value,
-                    phase,
-                    tool_policy.value,
+                log_view.log_run_complete(
+                    logger,
+                    provider=last_provider,
+                    stop_reason=STOP_REASON_FINAL,
+                    steps=step,
+                    max_steps=max_steps,
+                    mode=mode.value,
+                    phase=phase,
+                    tool_policy=tool_policy.value,
                 )
-                _log_run_return(
+                log_view.log_run_return(
+                    logger,
                     text=last_text,
                     provider=last_provider,
                     stop_reason=STOP_REASON_FINAL,
@@ -258,7 +248,8 @@ class MainLoop:
                     tool_call_count,
                 )
                 self._record_run(prompt=prompt, response=last_text)
-                _log_run_return(
+                log_view.log_run_return(
+                    logger,
                     text=last_text,
                     provider=last_provider,
                     stop_reason=STOP_REASON_TOOL_POLICY_BLOCKED,
@@ -278,15 +269,18 @@ class MainLoop:
             messages.extend(self._run_tool_calls(response.message))
 
         self._record_run(prompt=prompt, response=last_text)
-        logger.warning(
-            "主循环结束 reason=%s steps=%s provider=%s mode=%s tool_policy=%s",
-            STOP_REASON_MAX_STEPS_EXHAUSTED,
-            max_steps,
-            last_provider,
-            mode.value,
-            tool_policy.value,
+        log_view.log_run_complete(
+            logger,
+            provider=last_provider,
+            stop_reason=STOP_REASON_MAX_STEPS_EXHAUSTED,
+            steps=max_steps,
+            max_steps=max_steps,
+            mode=mode.value,
+            phase=None,
+            tool_policy=tool_policy.value,
         )
-        _log_run_return(
+        log_view.log_run_return(
+            logger,
             text=last_text,
             provider=last_provider,
             stop_reason=STOP_REASON_MAX_STEPS_EXHAUSTED,
@@ -307,23 +301,9 @@ class MainLoop:
         observations: list[Message] = []
         for tool_call in message.tool_calls:
             try:
-                logger.info(
-                    "%s id=%s name=%s args=%s",
-                    _color("准备调用工具", COLOR_YELLOW),
-                    tool_call.id,
-                    _color(tool_call.name, COLOR_YELLOW),
-                    _format_tool_arguments(tool_call.arguments),
-                )
+                log_view.log_tool_call(logger, tool_call)
                 output = self.tools.call(tool_call.name, tool_call.arguments)
-                logger.info(
-                    "%s id=%s name=%s is_error=%s output_chars=%s output_preview=%r",
-                    _color("工具调用完成", COLOR_GREEN),
-                    tool_call.id,
-                    _color(tool_call.name, COLOR_GREEN),
-                    output.is_error,
-                    len(output.content),
-                    _preview_text(output.content),
-                )
+                log_view.log_tool_result(logger, name=tool_call.name, output=output)
                 result = ToolCallResult(
                     tool_call_id=tool_call.id,
                     name=tool_call.name,
@@ -331,13 +311,7 @@ class MainLoop:
                     is_error=output.is_error,
                 )
             except ToolError as exc:
-                logger.warning(
-                    "%s id=%s name=%s error=%s",
-                    _color("工具调用失败", COLOR_RED),
-                    tool_call.id,
-                    _color(tool_call.name, COLOR_RED),
-                    exc,
-                )
+                log_view.log_tool_exception(logger, name=tool_call.name, error=str(exc))
                 result = ToolCallResult(
                     tool_call_id=tool_call.id,
                     name=tool_call.name,
@@ -377,39 +351,3 @@ def _tool_policy_for_phase(phase: str) -> ToolPolicy:
     if phase in {"think", "plan"}:
         return ToolPolicy.NONE
     return ToolPolicy.AUTO
-
-
-def _log_run_return(*, text: str, provider: str, stop_reason: str) -> None:
-    logger.info(
-        "%s provider=%s reason=%s text_chars=%s text_preview=%r",
-        _color("主循环返回", COLOR_GREEN),
-        provider,
-        stop_reason,
-        len(text),
-        _preview_text(text),
-    )
-
-
-def _format_tool_calls(tool_calls: tuple[ToolCall, ...]) -> str:
-    if not tool_calls:
-        return "none"
-    return ", ".join(
-        f"{_color(call.name, COLOR_YELLOW)}"
-        f"(id={call.id}, args={_format_tool_arguments(call.arguments)})"
-        for call in tool_calls
-    )
-
-
-def _format_tool_arguments(arguments: object) -> str:
-    return _color(_preview_text(str(arguments)), COLOR_DIM)
-
-
-def _preview_text(text: str) -> str:
-    normalized = text.replace("\n", "\\n")
-    if len(normalized) <= RETURN_PREVIEW_CHARS:
-        return normalized
-    return normalized[:RETURN_PREVIEW_CHARS] + "...<truncated>"
-
-
-def _color(text: object, color: str) -> str:
-    return f"{color}{text}{COLOR_RESET}"

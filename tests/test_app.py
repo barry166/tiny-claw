@@ -53,4 +53,17 @@ def test_application_registers_read_tool(tmp_path) -> None:
 
     app = build_application(settings)
 
-    assert "read" in app.health().tools
+    assert app.health().tools == ("read",)
+
+
+def test_application_registers_explicitly_enabled_tools(tmp_path) -> None:
+    settings = Settings.from_env(
+        {
+            "TINY_CLAW_STATE_DIR": str(tmp_path),
+            "TINY_CLAW_ENABLED_TOOLS": "read,write,bash",
+        }
+    )
+
+    app = build_application(settings)
+
+    assert app.health().tools == ("bash", "read", "write")

@@ -9,6 +9,7 @@ from typing import Any
 from tiny_claw._internal.errors import ToolError
 from tiny_claw._internal.schema.message import ToolDefinition
 from tiny_claw._internal.tools.base import ToolInput, ToolOutput
+from tiny_claw._internal.tools.builtin._common import positive_int, resolve_under_root
 
 DEFAULT_MAX_LINES = 200
 
@@ -65,16 +66,18 @@ class ReadTool:
         if not relative_path:
             raise ToolError("read tool requires a non-empty 'path' field")
 
-        start_line = _positive_int(payload.get("start_line", 1), field_name="start_line")
-        max_lines = _positive_int(
+        start_line = positive_int(
+            payload.get("start_line", 1),
+            field_name="start_line",
+            tool_name=self.name,
+        )
+        max_lines = positive_int(
             payload.get("max_lines", self.default_max_lines),
             field_name="max_lines",
+            tool_name=self.name,
         )
 
-        root = self.root.resolve()
-        target = (root / relative_path).resolve()
-        if not target.is_relative_to(root):
-            raise ToolError("read path must stay under the configured root")
+        target = resolve_under_root(self.root, relative_path, tool_name=self.name)
         if not target.exists():
             raise ToolError(f"read path does not exist: {relative_path}")
         if target.is_dir():
@@ -94,21 +97,3 @@ class ReadTool:
             f"{line_number}: {line}" for line_number, line in enumerate(selected, start=start_line)
         )
         return ToolOutput(content="\n".join(numbered_lines))
-
-
-def _positive_int(value: object, *, field_name: str) -> int:
-    error_message = f"read tool requires '{field_name}' to be a positive integer"
-    if isinstance(value, bool):
-        raise ToolError(error_message)
-    if isinstance(value, int):
-        parsed = value
-    elif isinstance(value, str):
-        try:
-            parsed = int(value)
-        except ValueError as exc:
-            raise ToolError(error_message) from exc
-    else:
-        raise ToolError(error_message)
-    if parsed < 1:
-        raise ToolError(error_message)
-    return parsed

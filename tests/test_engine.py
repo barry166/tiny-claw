@@ -16,7 +16,9 @@ from tiny_claw._internal.memory.file_store import FileMemoryStore
 from tiny_claw._internal.provider.base import LLMRequest, LLMResponse, ToolChoice
 from tiny_claw._internal.schema.message import Message, Role, ToolCall, ToolDefinition
 from tiny_claw._internal.tools.base import ToolInput, ToolOutput
+from tiny_claw._internal.tools.builtin.bash import BashTool
 from tiny_claw._internal.tools.builtin.read import ReadTool
+from tiny_claw._internal.tools.builtin.write import WriteTool
 from tiny_claw._internal.tools.registry import ToolRegistry
 
 
@@ -174,6 +176,64 @@ def test_main_loop_can_read_file_then_return_summary(tmp_path) -> None:
         and message.tool_call_id == "call-read-1"
         and message.name == "read"
         and "1: hello.txt 说 tiny-claw 已经可以读取文件。" in message.content
+        for message in provider.requests[1].messages
+    )
+
+
+def test_main_loop_can_write_file_then_return_summary(tmp_path) -> None:
+    write_call = ToolCall(
+        id="call-write-1",
+        name="write",
+        arguments={"path": "notes.txt", "content": "hello\n", "mode": "overwrite"},
+    )
+    provider = FakeProvider(
+        responses=[
+            Message.assistant(tool_calls=(write_call,)),
+            Message.assistant("notes.txt 已经写入。"),
+        ]
+    )
+    tools = ToolRegistry()
+    tools.register(WriteTool(root=tmp_path))
+    engine = _build_engine(provider=provider, tools=tools, workdir=tmp_path)
+
+    result = engine.run(prompt="写入 notes.txt", max_steps=2)
+
+    assert result.text == "notes.txt 已经写入。"
+    assert (tmp_path / "notes.txt").read_text(encoding="utf-8") == "hello\n"
+    assert any(
+        message.role is Role.TOOL
+        and message.tool_call_id == "call-write-1"
+        and message.name == "write"
+        and "mode=overwrite" in message.content
+        for message in provider.requests[1].messages
+    )
+
+
+def test_main_loop_returns_bash_error_observation_for_self_correction(tmp_path) -> None:
+    bash_call = ToolCall(
+        id="call-bash-1",
+        name="bash",
+        arguments={"command": "ls missing-file"},
+    )
+    provider = FakeProvider(
+        responses=[
+            Message.assistant(tool_calls=(bash_call,)),
+            Message.assistant("命令失败，因为文件不存在。"),
+        ]
+    )
+    tools = ToolRegistry()
+    tools.register(BashTool(workdir=tmp_path))
+    engine = _build_engine(provider=provider, tools=tools, workdir=tmp_path)
+
+    result = engine.run(prompt="检查 missing-file", max_steps=2)
+
+    assert result.text == "命令失败，因为文件不存在。"
+    assert any(
+        message.role is Role.TOOL
+        and message.tool_call_id == "call-bash-1"
+        and message.name == "bash"
+        and message.metadata["is_error"] is True
+        and "exit_code=" in message.content
         for message in provider.requests[1].messages
     )
 

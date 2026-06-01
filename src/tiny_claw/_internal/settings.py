@@ -15,6 +15,8 @@ LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
 DEFAULT_MAX_TOKENS = 1024
 DEFAULT_OPENAI_MODEL = "gpt-5.4"
 DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-20250514"
+DEFAULT_ENABLED_TOOLS = ("read",)
+SUPPORTED_TOOLS = {"bash", "read", "write"}
 
 
 @dataclass(frozen=True)
@@ -25,6 +27,7 @@ class Settings:
     max_tokens: int = DEFAULT_MAX_TOKENS
     state_dir: Path = DEFAULT_STATE_DIR
     workdir: Path = field(default_factory=lambda: Path.cwd().resolve())
+    enabled_tools: tuple[str, ...] = DEFAULT_ENABLED_TOOLS
     openai_api_key: str | None = None
     openai_base_url: str | None = None
     claude_api_key: str | None = None
@@ -43,6 +46,7 @@ class Settings:
         max_tokens = _positive_int_env(env.get("TINY_CLAW_MAX_TOKENS"), DEFAULT_MAX_TOKENS)
         state_dir = Path(env.get("TINY_CLAW_STATE_DIR", str(DEFAULT_STATE_DIR))).expanduser()
         workdir = Path(env.get("TINY_CLAW_WORKDIR", str(Path.cwd()))).expanduser().resolve()
+        enabled_tools = _enabled_tools_env(env.get("TINY_CLAW_ENABLED_TOOLS"))
 
         return cls(
             log_level=_normalize_log_level(resolved_log_level),
@@ -51,6 +55,7 @@ class Settings:
             max_tokens=max_tokens,
             state_dir=state_dir,
             workdir=workdir,
+            enabled_tools=enabled_tools,
             openai_api_key=_first_env(
                 env,
                 "OPENAI_API_KEY",
@@ -108,6 +113,20 @@ def _positive_int_env(value: str | None, default: int) -> int:
     if parsed < 1:
         raise ConfigurationError("TINY_CLAW_MAX_TOKENS must be greater than or equal to 1")
     return parsed
+
+
+def _enabled_tools_env(value: str | None) -> tuple[str, ...]:
+    if value is None:
+        return DEFAULT_ENABLED_TOOLS
+
+    names = tuple(name.strip().lower() for name in value.split(",") if name.strip())
+    unknown = sorted(set(names) - SUPPORTED_TOOLS)
+    if unknown:
+        raise ConfigurationError(
+            f"Invalid TINY_CLAW_ENABLED_TOOLS {', '.join(unknown)!r}; "
+            f"expected tools from: {', '.join(sorted(SUPPORTED_TOOLS))}"
+        )
+    return tuple(sorted(set(names)))
 
 
 def _load_environment(environ: Mapping[str, str] | None) -> Mapping[str, str]:
