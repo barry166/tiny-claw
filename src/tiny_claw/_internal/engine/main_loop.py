@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
 from tiny_claw._internal.context.builder import ContextBuilder
 from tiny_claw._internal.engine import log_view
-from tiny_claw._internal.errors import ToolError
+from tiny_claw._internal.engine.tool_executor import ToolExecutor
 from tiny_claw._internal.memory.file_store import FileMemoryStore
 from tiny_claw._internal.provider.base import LLMProvider, LLMRequest, ToolChoice
-from tiny_claw._internal.schema.message import Message, ToolCallResult
+from tiny_claw._internal.schema.message import Message
 from tiny_claw._internal.tools.registry import ToolRegistry
 
 STOP_REASON_FINAL = "final"
@@ -53,6 +53,10 @@ class MainLoop:
     memory: FileMemoryStore
     tools: ToolRegistry
     workdir: Path
+    _tool_executor: ToolExecutor = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "_tool_executor", ToolExecutor(tools=self.tools))
 
     @property
     def provider_name(self) -> str:
@@ -266,7 +270,7 @@ class MainLoop:
                     plan=plan,
                 )
 
-            messages.extend(self._run_tool_calls(response.message))
+            messages.extend(self._tool_executor.run_tool_calls(response.message.tool_calls))
 
         self._record_run(prompt=prompt, response=last_text)
         log_view.log_run_complete(
@@ -296,30 +300,6 @@ class MainLoop:
             tool_policy=tool_policy,
             plan=plan,
         )
-
-    def _run_tool_calls(self, message: Message) -> tuple[Message, ...]:
-        observations: list[Message] = []
-        for tool_call in message.tool_calls:
-            try:
-                log_view.log_tool_call(logger, tool_call)
-                output = self.tools.call(tool_call.name, tool_call.arguments)
-                log_view.log_tool_result(logger, name=tool_call.name, output=output)
-                result = ToolCallResult(
-                    tool_call_id=tool_call.id,
-                    name=tool_call.name,
-                    content=output.content,
-                    is_error=output.is_error,
-                )
-            except ToolError as exc:
-                log_view.log_tool_exception(logger, name=tool_call.name, error=str(exc))
-                result = ToolCallResult(
-                    tool_call_id=tool_call.id,
-                    name=tool_call.name,
-                    content=str(exc),
-                    is_error=True,
-                )
-            observations.append(result.to_message())
-        return tuple(observations)
 
     def _record_run(self, *, prompt: str, response: str) -> None:
         self.memory.append("last_prompt", prompt)
