@@ -31,6 +31,8 @@
 `_internal` 视为私有实现边界。外部使用应优先通过 `tiny-claw` 命令、
 `python -m tiny_claw`，或明确暴露的公开 API。
 
+详细架构设计、模块边界和依赖流向见 `docs/ARCHITECTURE.md`。
+
 ## 运行入口
 
 常用命令：

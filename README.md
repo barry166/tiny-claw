@@ -21,6 +21,12 @@ src/tiny_claw/
     └── tools/
 ```
 
+## Architecture
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the architecture design,
+module boundaries, dependency flow, context engine, tool execution, and main
+loop.
+
 ## Run
 
 ```bash
