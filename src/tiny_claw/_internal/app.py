@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from tiny_claw._internal.context.builder import ContextBuilder
+from tiny_claw._internal.engine.channel import Channel
 from tiny_claw._internal.engine.main_loop import MainLoop, RunMode, RunResult
 from tiny_claw._internal.errors import ConfigurationError
 from tiny_claw._internal.memory.file_store import FileMemoryStore
@@ -13,7 +14,7 @@ from tiny_claw._internal.provider.base import LLMProvider
 from tiny_claw._internal.provider.claude import ClaudeProvider
 from tiny_claw._internal.provider.echo import EchoProvider
 from tiny_claw._internal.provider.openai import OpenAIProvider
-from tiny_claw._internal.settings import Settings
+from tiny_claw._internal.settings import DEFAULT_OPENAI_MODEL, Settings
 from tiny_claw._internal.tools.base import Tool
 from tiny_claw._internal.tools.builtin.bash import BashTool
 from tiny_claw._internal.tools.builtin.edit import EditTool
@@ -62,22 +63,37 @@ class Application:
         prompt: str,
         max_steps: int,
         mode: RunMode = RunMode.ACT,
+        channel: Channel | None = None,
     ) -> RunResult:
-        return self.engine.run(prompt=prompt, max_steps=max_steps, mode=mode)
+        return self.engine.run(prompt=prompt, max_steps=max_steps, mode=mode, channel=channel)
 
 
-def build_application(settings: Settings) -> Application:
-    provider = _build_provider(settings)
+def build_application(
+    settings: Settings,
+    *,
+    provider: LLMProvider | None = None,
+) -> Application:
+    resolved_provider = provider if provider is not None else _build_provider(settings)
     memory = FileMemoryStore(settings.state_dir)
     tools = _build_tool_registry(settings.workdir, enabled_tools=settings.enabled_tools)
     engine = MainLoop(
-        provider=provider,
+        provider=resolved_provider,
         context_builder=ContextBuilder(),
         memory=memory,
         tools=tools,
         workdir=settings.workdir,
     )
     return Application(settings=settings, engine=engine, tools=tools)
+
+
+def build_integration_application(settings: Settings) -> Application:
+    provider = OpenAIProvider(
+        api_key=settings.openai_api_key,
+        model=_integration_model(settings),
+        max_tokens=settings.max_tokens,
+        base_url=settings.openai_base_url,
+    )
+    return build_application(settings, provider=provider)
 
 
 def _build_provider(settings: Settings) -> LLMProvider:
@@ -98,6 +114,12 @@ def _build_provider(settings: Settings) -> LLMProvider:
             max_tokens=settings.max_tokens,
         )
     raise ConfigurationError(f"Unsupported provider: {settings.provider_name}")
+
+
+def _integration_model(settings: Settings) -> str:
+    if settings.provider_name == "openai":
+        return settings.model
+    return DEFAULT_OPENAI_MODEL
 
 
 def _build_tool_registry(

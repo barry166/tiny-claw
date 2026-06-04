@@ -2,9 +2,24 @@ from __future__ import annotations
 
 import pytest
 
-from tiny_claw._internal.app import build_application
+from tiny_claw._internal.app import build_application, build_integration_application
 from tiny_claw._internal.errors import ConfigurationError
+from tiny_claw._internal.provider.base import LLMRequest, LLMResponse
+from tiny_claw._internal.schema.message import Message
 from tiny_claw._internal.settings import Settings
+
+
+class FakeProvider:
+    @property
+    def name(self) -> str:
+        return "fake-provider"
+
+    def complete(self, request: LLMRequest) -> LLMResponse:
+        return LLMResponse(
+            message=Message.assistant(content="fake"),
+            provider=self.name,
+            model="fake-model",
+        )
 
 
 def test_application_supports_claude_alias(tmp_path) -> None:
@@ -46,6 +61,27 @@ def test_application_passes_openai_base_url(tmp_path) -> None:
     app = build_application(settings)
 
     assert app.settings.openai_base_url == "https://openai.example/v1"
+
+
+def test_application_uses_injected_provider(tmp_path) -> None:
+    settings = Settings.from_env({"TINY_CLAW_STATE_DIR": str(tmp_path)})
+
+    app = build_application(settings, provider=FakeProvider())
+
+    assert app.engine.provider_name == "fake-provider"
+
+
+def test_integration_application_uses_openai_even_when_default_provider_is_echo(tmp_path) -> None:
+    settings = Settings.from_env(
+        {
+            "OPENAI_KEY": "key",
+            "TINY_CLAW_STATE_DIR": str(tmp_path),
+        }
+    )
+
+    app = build_integration_application(settings)
+
+    assert app.engine.provider_name == "openai"
 
 
 def test_application_registers_read_tool(tmp_path) -> None:

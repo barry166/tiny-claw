@@ -60,6 +60,45 @@ def test_settings_reads_provider_specific_defaults_and_keys() -> None:
     assert claude_settings.claude_api_key == "claude-key"
 
 
+def test_settings_reads_server_and_feishu_configuration() -> None:
+    settings = Settings.from_env(
+        {
+            "TINY_CLAW_SERVER_HOST": "127.0.0.1",
+            "TINY_CLAW_SERVER_PORT": "9000",
+            "FEISHU_APP_ID": "cli_xxx",
+            "FEISHU_APP_SECRET": "secret",
+            "FEISHU_VERIFICATION_TOKEN": "token",
+            "FEISHU_ENCRYPT_KEY": "encrypt",
+            "FEISHU_EVENT_PATH": "/api/events/custom-feishu",
+        }
+    )
+
+    assert settings.server_host == "127.0.0.1"
+    assert settings.server_port == 9000
+    assert settings.feishu_app_id == "cli_xxx"
+    assert settings.feishu_app_secret == "secret"
+    assert settings.feishu_verification_token == "token"
+    assert settings.feishu_encrypt_key == "encrypt"
+    assert settings.feishu_event_path == "/api/events/custom-feishu"
+
+
+def test_settings_accepts_lark_feishu_aliases() -> None:
+    settings = Settings.from_env(
+        {
+            "LARK_APP_ID": "cli_lark",
+            "LARK_APP_SECRET": "lark-secret",
+        }
+    )
+
+    assert settings.feishu_app_id == "cli_lark"
+    assert settings.feishu_app_secret == "lark-secret"
+
+
+def test_settings_rejects_invalid_feishu_event_path() -> None:
+    with pytest.raises(ConfigurationError, match="FEISHU_EVENT_PATH"):
+        Settings.from_env({"FEISHU_EVENT_PATH": "api/events/feishu"})
+
+
 def test_settings_prefers_explicit_model() -> None:
     settings = Settings.from_env({"TINY_CLAW_PROVIDER": "openai", "TINY_CLAW_MODEL": "custom"})
 

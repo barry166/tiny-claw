@@ -12,6 +12,7 @@ from tiny_claw._internal.app import Application, build_application
 from tiny_claw._internal.engine.main_loop import RunMode
 from tiny_claw._internal.errors import ExitCode, TinyClawError
 from tiny_claw._internal.logging_config import configure_logging
+from tiny_claw._internal.server import config_from_settings, serve
 from tiny_claw._internal.settings import Settings
 
 Handler = Callable[[argparse.Namespace, Application], int]
@@ -66,6 +67,37 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_parser.set_defaults(handler=_handle_run)
 
+    serve_parser = subparsers.add_parser("serve", help="Start the unified HTTP event server.")
+    serve_parser.add_argument(
+        "--host",
+        default=None,
+        help="Host to bind; defaults to TINY_CLAW_SERVER_HOST or 0.0.0.0.",
+    )
+    serve_parser.add_argument(
+        "--port",
+        default=None,
+        type=_positive_int,
+        help="Port to bind; defaults to TINY_CLAW_SERVER_PORT or 8000.",
+    )
+    serve_parser.add_argument(
+        "--feishu-path",
+        default=None,
+        help="Feishu event callback path; defaults to FEISHU_EVENT_PATH.",
+    )
+    serve_parser.add_argument(
+        "--max-steps",
+        default=20,
+        type=_positive_int,
+        help="Maximum main-loop steps per inbound event.",
+    )
+    serve_parser.add_argument(
+        "--mode",
+        choices=RUN_MODES,
+        default="act",
+        help="Run mode for inbound events.",
+    )
+    serve_parser.set_defaults(handler=_handle_serve)
+
     return parser
 
 
@@ -103,6 +135,21 @@ def _handle_run(args: argparse.Namespace, app: Application) -> int:
         mode=RunMode(args.mode),
     )
     print(result.text)
+    return int(ExitCode.OK)
+
+
+def _handle_serve(args: argparse.Namespace, app: Application) -> int:
+    import asyncio
+
+    config = config_from_settings(
+        app.settings,
+        host=args.host,
+        port=args.port,
+        feishu_event_path=args.feishu_path,
+        max_steps=args.max_steps,
+        mode=RunMode(args.mode),
+    )
+    asyncio.run(serve(app, config))
     return int(ExitCode.OK)
 
 

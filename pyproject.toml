@@ -11,6 +11,7 @@ requires-python = ">=3.11"
 authors = [{ name = "Tiny Claw Authors" }]
 dependencies = [
     "anthropic>=0.104,<1",
+    "lark-oapi[aiohttp]>=1.6.8,<2",
     "openai>=2.38,<3",
 ]
 

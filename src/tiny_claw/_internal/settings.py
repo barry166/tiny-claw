@@ -17,6 +17,9 @@ DEFAULT_OPENAI_MODEL = "gpt-5.4"
 DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-20250514"
 DEFAULT_ENABLED_TOOLS = ("read",)
 SUPPORTED_TOOLS = {"bash", "edit", "read", "write"}
+DEFAULT_SERVER_HOST = "0.0.0.0"
+DEFAULT_SERVER_PORT = 8000
+DEFAULT_FEISHU_EVENT_PATH = "/api/events/feishu"
 
 
 @dataclass(frozen=True)
@@ -28,9 +31,16 @@ class Settings:
     state_dir: Path = DEFAULT_STATE_DIR
     workdir: Path = field(default_factory=lambda: Path.cwd().resolve())
     enabled_tools: tuple[str, ...] = DEFAULT_ENABLED_TOOLS
+    server_host: str = DEFAULT_SERVER_HOST
+    server_port: int = DEFAULT_SERVER_PORT
     openai_api_key: str | None = None
     openai_base_url: str | None = None
     claude_api_key: str | None = None
+    feishu_app_id: str | None = None
+    feishu_app_secret: str | None = None
+    feishu_verification_token: str | None = None
+    feishu_encrypt_key: str | None = None
+    feishu_event_path: str = DEFAULT_FEISHU_EVENT_PATH
 
     @classmethod
     def from_env(
@@ -47,6 +57,7 @@ class Settings:
         state_dir = Path(env.get("TINY_CLAW_STATE_DIR", str(DEFAULT_STATE_DIR))).expanduser()
         workdir = Path(env.get("TINY_CLAW_WORKDIR", str(Path.cwd()))).expanduser().resolve()
         enabled_tools = _enabled_tools_env(env.get("TINY_CLAW_ENABLED_TOOLS"))
+        server_port = _positive_int_env(env.get("TINY_CLAW_SERVER_PORT"), DEFAULT_SERVER_PORT)
 
         return cls(
             log_level=_normalize_log_level(resolved_log_level),
@@ -56,6 +67,8 @@ class Settings:
             state_dir=state_dir,
             workdir=workdir,
             enabled_tools=enabled_tools,
+            server_host=env.get("TINY_CLAW_SERVER_HOST", DEFAULT_SERVER_HOST),
+            server_port=server_port,
             openai_api_key=_first_env(
                 env,
                 "OPENAI_API_KEY",
@@ -73,6 +86,11 @@ class Settings:
                 "CLAUDE_KEY",
                 "TINY_CLAW_CLAUDE_API_KEY",
             ),
+            feishu_app_id=_first_env(env, "FEISHU_APP_ID", "LARK_APP_ID"),
+            feishu_app_secret=_first_env(env, "FEISHU_APP_SECRET", "LARK_APP_SECRET"),
+            feishu_verification_token=env.get("FEISHU_VERIFICATION_TOKEN"),
+            feishu_encrypt_key=env.get("FEISHU_ENCRYPT_KEY"),
+            feishu_event_path=_event_path_env(env.get("FEISHU_EVENT_PATH")),
         )
 
 
@@ -113,6 +131,17 @@ def _positive_int_env(value: str | None, default: int) -> int:
     if parsed < 1:
         raise ConfigurationError("TINY_CLAW_MAX_TOKENS must be greater than or equal to 1")
     return parsed
+
+
+def _event_path_env(value: str | None) -> str:
+    if value is None:
+        return DEFAULT_FEISHU_EVENT_PATH
+    path = value.strip()
+    if not path:
+        raise ConfigurationError("FEISHU_EVENT_PATH must not be empty")
+    if not path.startswith("/"):
+        raise ConfigurationError("FEISHU_EVENT_PATH must start with '/'")
+    return path
 
 
 def _enabled_tools_env(value: str | None) -> tuple[str, ...]:

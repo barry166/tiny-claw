@@ -63,3 +63,42 @@ def test_python_module_entrypoint_shows_help(tmp_path) -> None:
 
     assert completed.returncode == 0
     assert "tiny-claw" in completed.stdout
+
+
+def test_serve_command_builds_unified_server_config(monkeypatch, tmp_path) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake_serve(_app, config) -> None:
+        captured["host"] = config.host
+        captured["port"] = config.port
+        captured["feishu_event_path"] = config.feishu_event_path
+        captured["max_steps"] = config.max_steps
+        captured["mode"] = config.mode.value
+
+    monkeypatch.setenv("TINY_CLAW_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr("tiny_claw.cli.serve", fake_serve)
+
+    exit_code = main(
+        [
+            "serve",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8001",
+            "--feishu-path",
+            "/api/events/feishu-test",
+            "--max-steps",
+            "3",
+            "--mode",
+            "think",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured == {
+        "host": "127.0.0.1",
+        "port": 8001,
+        "feishu_event_path": "/api/events/feishu-test",
+        "max_steps": 3,
+        "mode": "think",
+    }

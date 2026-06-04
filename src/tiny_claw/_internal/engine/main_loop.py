@@ -5,10 +5,12 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from enum import StrEnum
+from functools import partial
 from pathlib import Path
 
 from tiny_claw._internal.context.builder import ContextBuilder
 from tiny_claw._internal.engine import log_view
+from tiny_claw._internal.engine.channel import Channel, NullChannel, notify_channel
 from tiny_claw._internal.engine.tool_executor import ToolExecutor
 from tiny_claw._internal.memory.file_store import FileMemoryStore
 from tiny_claw._internal.provider.base import LLMProvider, LLMRequest, ToolChoice
@@ -68,10 +70,20 @@ class MainLoop:
         prompt: str,
         max_steps: int = 20,
         mode: RunMode = RunMode.ACT,
+        channel: Channel | None = None,
     ) -> RunResult:
         if max_steps < 1:
             raise ValueError("max_steps must be greater than or equal to 1")
 
+        resolved_channel = channel or NullChannel()
+        notify_channel(
+            partial(
+                resolved_channel.on_start,
+                prompt=prompt,
+                mode=mode.value,
+                max_steps=max_steps,
+            )
+        )
         recent_memory = self.memory.read_recent(limit=5)
         context = self.context_builder.build(prompt=prompt, memories=recent_memory)
         messages = list(context.messages)
@@ -107,6 +119,12 @@ class MainLoop:
                     step,
                     max_steps,
                 )
+            self._notify_thinking(
+                channel=resolved_channel,
+                step=step,
+                max_steps=max_steps,
+                phase=phase,
+            )
             log_view.log_model_request(
                 logger,
                 messages=len(messages),
@@ -153,6 +171,13 @@ class MainLoop:
                         provider=last_provider,
                         stop_reason=STOP_REASON_TOOL_POLICY_BLOCKED,
                     )
+                    self._notify_done(
+                        channel=resolved_channel,
+                        text=last_text,
+                        stop_reason=STOP_REASON_TOOL_POLICY_BLOCKED,
+                        steps=step,
+                        max_steps=max_steps,
+                    )
                     return RunResult(
                         text=last_text,
                         provider=last_provider,
@@ -190,6 +215,13 @@ class MainLoop:
                         text=last_text,
                         provider=last_provider,
                         stop_reason=STOP_REASON_MAX_STEPS_EXHAUSTED,
+                    )
+                    self._notify_done(
+                        channel=resolved_channel,
+                        text=last_text,
+                        stop_reason=STOP_REASON_MAX_STEPS_EXHAUSTED,
+                        steps=step,
+                        max_steps=max_steps,
                     )
                     return RunResult(
                         text=last_text,
@@ -234,6 +266,13 @@ class MainLoop:
                     provider=last_provider,
                     stop_reason=STOP_REASON_FINAL,
                 )
+                self._notify_done(
+                    channel=resolved_channel,
+                    text=last_text,
+                    stop_reason=STOP_REASON_FINAL,
+                    steps=step,
+                    max_steps=max_steps,
+                )
                 return RunResult(
                     text=last_text,
                     provider=last_provider,
@@ -258,6 +297,13 @@ class MainLoop:
                     provider=last_provider,
                     stop_reason=STOP_REASON_TOOL_POLICY_BLOCKED,
                 )
+                self._notify_done(
+                    channel=resolved_channel,
+                    text=last_text,
+                    stop_reason=STOP_REASON_TOOL_POLICY_BLOCKED,
+                    steps=step,
+                    max_steps=max_steps,
+                )
                 return RunResult(
                     text=last_text,
                     provider=last_provider,
@@ -270,7 +316,12 @@ class MainLoop:
                     plan=plan,
                 )
 
-            messages.extend(self._tool_executor.run_tool_calls(response.message.tool_calls))
+            messages.extend(
+                self._tool_executor.run_tool_calls(
+                    response.message.tool_calls,
+                    channel=resolved_channel,
+                )
+            )
 
         self._record_run(prompt=prompt, response=last_text)
         log_view.log_run_complete(
@@ -288,6 +339,13 @@ class MainLoop:
             text=last_text,
             provider=last_provider,
             stop_reason=STOP_REASON_MAX_STEPS_EXHAUSTED,
+        )
+        self._notify_done(
+            channel=resolved_channel,
+            text=last_text,
+            stop_reason=STOP_REASON_MAX_STEPS_EXHAUSTED,
+            steps=max_steps,
+            max_steps=max_steps,
         )
         return RunResult(
             text=last_text,
@@ -308,6 +366,42 @@ class MainLoop:
             "运行记忆已记录 prompt_chars=%s response_chars=%s",
             len(prompt),
             len(response),
+        )
+
+    def _notify_thinking(
+        self,
+        *,
+        channel: Channel,
+        step: int,
+        max_steps: int,
+        phase: str,
+    ) -> None:
+        notify_channel(
+            partial(
+                channel.on_thinking,
+                step=step,
+                max_steps=max_steps,
+                phase=phase,
+            )
+        )
+
+    def _notify_done(
+        self,
+        *,
+        channel: Channel,
+        text: str,
+        stop_reason: str,
+        steps: int,
+        max_steps: int,
+    ) -> None:
+        notify_channel(
+            partial(
+                channel.on_done,
+                text=text,
+                stop_reason=stop_reason,
+                steps=steps,
+                max_steps=max_steps,
+            )
         )
 
 

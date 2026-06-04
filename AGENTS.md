@@ -9,7 +9,7 @@
 
 - 面向用户的终端命令名：`tiny-claw`
 - Python 可导入包名：`tiny_claw`
-- 第一版定位：CLI 优先，不直接做 Web API
+- 第一版定位：CLI 优先；`serve` 子命令提供统一 HTTP 事件服务入口，用于飞书等外部平台回调。
 
 框架需要提供清晰的命令入口、应用装配层，以及面向后续扩展的内部模块：`engine`、
 `provider`、`context`、`tools`、`memory`、`integrations`。
@@ -41,6 +41,7 @@ uv run tiny-claw health
 uv run tiny-claw run "hello"
 uv run tiny-claw run --mode think "先分析并制定计划"
 uv run tiny-claw run --mode plan-act "先规划再执行"
+uv run tiny-claw serve --host 0.0.0.0 --port 8000
 uv run python -m tiny_claw --help
 ```
 
@@ -50,6 +51,26 @@ uv run python -m tiny_claw --help
 [project.scripts]
 tiny-claw = "tiny_claw.cli:main"
 ```
+
+统一 HTTP 服务：
+
+```bash
+FEISHU_APP_ID=cli_xxx \
+FEISHU_APP_SECRET=xxx \
+FEISHU_VERIFICATION_TOKEN=xxx \
+FEISHU_ENCRYPT_KEY=xxx \
+uv run tiny-claw serve --host 0.0.0.0 --port 8000
+```
+
+- `GET /health`：服务健康检查。
+- `POST /api/events/feishu`：飞书事件回调入口，默认路径可用 `FEISHU_EVENT_PATH` 或
+  `--feishu-path` 覆盖。
+- 本地飞书回调测试需要公网 HTTPS，例如 `ngrok http 8000`，飞书后台 Request URL 配置为
+  `https://<public-host>/api/events/feishu`。
+- 未配置飞书 Encrypt Key 或 Verification Token 时，可省略对应环境变量；如果飞书后台配置了，
+  本地环境必须保持一致。
+- 真实模型回复时继续使用统一 `serve` 入口，并叠加 provider 配置，例如
+  `TINY_CLAW_PROVIDER=openai OPENAI_API_KEY=... TINY_CLAW_ENABLED_TOOLS=read`。
 
 ## 开发约定
 
@@ -79,6 +100,7 @@ uv run pytest
 
 ```bash
 uv run tiny-claw --help
+uv run tiny-claw serve --help
 TINY_CLAW_STATE_DIR=.tmp-state uv run tiny-claw health
 TINY_CLAW_STATE_DIR=.tmp-state uv run tiny-claw run "hello tiny claw"
 uv run python -m tiny_claw --help
@@ -96,9 +118,16 @@ uv run python -m tiny_claw --help
   `claude-sonnet-4-20250514`，其他 provider 默认等于 provider 名称。
 - `TINY_CLAW_MAX_TOKENS`：模型最大输出 token，默认 `1024`。
 - `TINY_CLAW_STATE_DIR`：记忆 / 状态目录，默认 `~/.tiny-claw`。
+- `TINY_CLAW_SERVER_HOST`：统一 HTTP 服务监听 host，默认 `0.0.0.0`。
+- `TINY_CLAW_SERVER_PORT`：统一 HTTP 服务监听端口，默认 `8000`。
 - `OPENAI_API_KEY` 或 `OPENAI_KEY`：`openai` provider 必需。
 - `OPENAI_BASE_URL`：可选 OpenAI-compatible API base URL。
 - `ANTHROPIC_API_KEY` 或 `CLAUDE_KEY`：`claude` / `anthropic` provider 必需。
+- `FEISHU_APP_ID` 或 `LARK_APP_ID`：飞书事件回调 endpoint 必需。
+- `FEISHU_APP_SECRET` 或 `LARK_APP_SECRET`：飞书事件回调 endpoint 必需。
+- `FEISHU_VERIFICATION_TOKEN`：飞书事件订阅 verification token，可选。
+- `FEISHU_ENCRYPT_KEY`：飞书事件订阅 encrypt key，可选。
+- `FEISHU_EVENT_PATH`：飞书事件回调路径，默认 `/api/events/feishu`。
 
 CLI 会读取当前执行目录下的 `.env` 文件，真实环境变量优先级高于 `.env`。
 `.env` 包含密钥，必须保持在 git ignore 中。
