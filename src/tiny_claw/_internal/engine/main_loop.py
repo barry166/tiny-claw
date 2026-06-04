@@ -85,9 +85,20 @@ class MainLoop:
             )
         )
         recent_memory = self.memory.read_recent(limit=5)
-        context = self.context_builder.build(prompt=prompt, memories=recent_memory)
+        context = self.context_builder.build(
+            prompt=prompt,
+            memories=recent_memory,
+            workdir=self.workdir,
+        )
         messages = list(context.messages)
         registered_tool_definitions = self.tools.definitions()
+        if context.allowed_tools is not None:
+            allowed_tools = set(context.allowed_tools)
+            registered_tool_definitions = tuple(
+                definition
+                for definition in registered_tool_definitions
+                if definition.name in allowed_tools
+            )
         last_text = ""
         last_provider = self.provider.name
         plan: str | None = None
@@ -101,6 +112,12 @@ class MainLoop:
             registered_tools=len(registered_tool_definitions),
             memories=len(recent_memory),
         )
+        if context.selected_skills:
+            logger.info(
+                "上下文技能已加载 skills=%s allowed_tools=%s",
+                ",".join(skill.name for skill in context.selected_skills),
+                ",".join(context.allowed_tools or ()),
+            )
         if mode is RunMode.THINK:
             logger.info("思考模式已启用：本次请求不会向模型暴露工具定义，也不会执行工具调用")
         if mode is RunMode.PLAN_ACT:

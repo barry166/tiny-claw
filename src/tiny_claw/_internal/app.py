@@ -78,7 +78,7 @@ def build_application(
     tools = _build_tool_registry(settings.workdir, enabled_tools=settings.enabled_tools)
     engine = MainLoop(
         provider=resolved_provider,
-        context_builder=ContextBuilder(),
+        context_builder=ContextBuilder(workdir=settings.workdir),
         memory=memory,
         tools=tools,
         workdir=settings.workdir,

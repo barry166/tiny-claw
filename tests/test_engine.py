@@ -101,6 +101,56 @@ def test_main_loop_sends_tool_definitions(tmp_path) -> None:
     assert provider.requests[0].tool_choice is ToolChoice.AUTO
 
 
+def test_main_loop_limits_visible_tools_for_active_skill(tmp_path) -> None:
+    (tmp_path / ".claw" / "skills" / "read-only").mkdir(parents=True)
+    (tmp_path / ".claw" / "skills" / "read-only" / "SKILL.md").write_text(
+        """---
+name: read-only
+description: Read only workflow
+allowed-tools: read
+---
+
+# Read Only
+""",
+        encoding="utf-8",
+    )
+    provider = FakeProvider()
+    tools = ToolRegistry()
+    tools.register(ReadTool(root=tmp_path))
+    tools.register(WriteTool(root=tmp_path))
+    engine = _build_engine(provider=provider, tools=tools, workdir=tmp_path)
+
+    engine.run(prompt="$read-only inspect", max_steps=1)
+
+    assert provider.requests[0].tools == (ReadTool(root=tmp_path).definition(),)
+
+
+def test_main_loop_keeps_global_tools_when_active_skill_omits_allowed_tools(tmp_path) -> None:
+    (tmp_path / ".claw" / "skills" / "git-workflow").mkdir(parents=True)
+    (tmp_path / ".claw" / "skills" / "git-workflow" / "SKILL.md").write_text(
+        """---
+name: git-workflow
+description: Git workflow
+---
+
+# Git Workflow
+""",
+        encoding="utf-8",
+    )
+    provider = FakeProvider()
+    tools = ToolRegistry()
+    tools.register(BashTool(workdir=tmp_path))
+    tools.register(ReadTool(root=tmp_path))
+    engine = _build_engine(provider=provider, tools=tools, workdir=tmp_path)
+
+    engine.run(prompt="$git-workflow commit", max_steps=1)
+
+    assert provider.requests[0].tools == (
+        BashTool(workdir=tmp_path).definition(),
+        ReadTool(root=tmp_path).definition(),
+    )
+
+
 def test_main_loop_hides_tools_in_think_mode(tmp_path) -> None:
     provider = FakeProvider()
     tools = ToolRegistry()
