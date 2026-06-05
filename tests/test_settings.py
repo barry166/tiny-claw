@@ -25,6 +25,21 @@ def test_settings_defaults_to_read_tool_only() -> None:
     assert settings.enabled_tools == ("read",)
 
 
+def test_settings_uses_internal_context_compactor_defaults() -> None:
+    settings = Settings.from_env(
+        {
+            "TINY_CLAW_CONTEXT_MAX_CHARS": "10",
+            "TINY_CLAW_CONTEXT_RETAIN_LAST_MESSAGES": "2",
+        }
+    )
+
+    assert settings.context_max_chars == 120_000
+    assert settings.context_retain_last_messages == 8
+    assert settings.context_old_tool_result_mask_chars == 240
+    assert settings.context_recent_tool_result_head_chars == 2_000
+    assert settings.context_recent_tool_result_tail_chars == 2_000
+
+
 def test_settings_reads_enabled_tools_from_environment() -> None:
     settings = Settings.from_env({"TINY_CLAW_ENABLED_TOOLS": "read,write,bash,edit,read"})
 

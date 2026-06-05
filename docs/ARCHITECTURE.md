@@ -103,6 +103,7 @@ flowchart TD
 
 - `ContextBuilder`：兼容入口，供 engine 调用。
 - `PromptComposer`：负责按优先级拼装 `PromptContext`。
+- `ContextCompactor`：在 provider 请求前压缩临时 messages，作为上下文过长兜底。
 - `SkillRegistry`：扫描 `.claw/skills/<skill-name>/SKILL.md`，解析 frontmatter 和正文。
 - `SkillSelector`：支持 `$skill args`、`/skill args` 显式调用，也支持轻量关键词自动匹配。
 
@@ -116,6 +117,11 @@ flowchart TD
 它不调用 provider，也不执行工具。这样可以保证“模型看到什么”和“系统能做什么”分离。
 
 Skill 权限有一条关键规则：`allowed-tools` 只能收窄工具，不能提升权限。最终可见工具来自 `TINY_CLAW_ENABLED_TOOLS`，如果 active skill 声明了非空 `allowed-tools`，再取交集；如果 skill 没写 `allowed-tools`，就不额外限制。
+
+`ContextCompactor` 不改变 session 或 memory。它只压缩本轮发给 provider 的临时
+`messages` 视图：旧 tool result 会被 observation masking，最近 tool result 会做
+head-tail truncation，assistant 的 tool calls、system message 和最后一条 user message
+保持不变。压缩发生时，`log_view` 会记录原始字符数、压缩后字符数、mask/truncate 数量，以及是否仍超出预算。
 
 ### 编排层：`engine/`
 
@@ -139,10 +145,11 @@ Skill 权限有一条关键规则：`allowed-tools` 只能收窄工具，不能�
 1. 通过 `SessionRef` 找到当前 session 的 recent memory。
 2. 调用 `ContextBuilder` 生成 `PromptContext`，其中 `workdir` 来自 `SessionRef.workdir`。
 3. 计算本轮最终可见工具。
-4. 请求 `LLMProvider.complete()`。
-5. 如果 assistant 没有 tool calls，记录记忆并返回最终结果。
-6. 如果有 tool calls 且当前阶段允许工具，则交给 `ToolExecutor`。
-7. 把工具结果作为 `Role.TOOL` message 追加回消息列表，进入下一轮。
+4. 调用 `ContextCompactor` 生成本轮 provider 请求视图。
+5. 请求 `LLMProvider.complete()`。
+6. 如果 assistant 没有 tool calls，记录记忆并返回最终结果。
+7. 如果有 tool calls 且当前阶段允许工具，则交给 `ToolExecutor`。
+8. 把工具结果作为 `Role.TOOL` message 追加回原始消息列表，进入下一轮。
 
 如果模型在 `think` 或 `plan` 阶段返回工具调用，主循环会阻止执行，并以 `tool_policy_blocked` 停止。这是为了保证“隐藏工具”的模式语义不被模型绕过。
 

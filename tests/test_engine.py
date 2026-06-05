@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from tiny_claw._internal.context.builder import ContextBuilder
+from tiny_claw._internal.context import ContextBuilder, ContextCompactor
 from tiny_claw._internal.engine.main_loop import (
     STOP_REASON_FINAL,
     STOP_REASON_MAX_STEPS_EXHAUSTED,
@@ -64,6 +64,34 @@ class FakeTool:
 
     def run(self, input: ToolInput) -> ToolOutput:
         return ToolOutput(content=f"observed:{input.arguments['message']}")
+
+
+class LargeOutputTool:
+    @property
+    def name(self) -> str:
+        return "fake_tool"
+
+    @property
+    def description(self) -> str:
+        return "Fake tool with a large observation for compaction tests."
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {"message": {"type": "string"}},
+            "required": ["message"],
+        }
+
+    def definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name=self.name,
+            description=self.description,
+            parameters=self.parameters,
+        )
+
+    def run(self, input: ToolInput) -> ToolOutput:
+        return ToolOutput(content="BEGIN-" + ("PAYLOAD" * 80) + "-END")
 
 
 def test_main_loop_accepts_injected_components(tmp_path) -> None:
@@ -388,6 +416,79 @@ def test_main_loop_returns_bash_error_observation_for_self_correction(tmp_path) 
     )
 
 
+def test_main_loop_compacts_provider_request_without_mutating_history(tmp_path, caplog) -> None:
+    call = ToolCall(id="call-1", name="fake_tool", arguments={"message": "ok"})
+    provider = FakeProvider(
+        responses=[
+            Message.assistant(tool_calls=(call,)),
+            Message.assistant("done"),
+        ]
+    )
+    tools = ToolRegistry()
+    tools.register(LargeOutputTool())
+    engine = _build_engine(
+        provider=provider,
+        tools=tools,
+        workdir=tmp_path,
+        context_compactor=ContextCompactor(
+            max_chars=800,
+            retain_last_messages=2,
+            recent_tool_result_head_chars=8,
+            recent_tool_result_tail_chars=8,
+        ),
+    )
+
+    with caplog.at_level("INFO"):
+        result = engine.run(prompt="use tool", max_steps=2, session=_session(tmp_path))
+
+    assert result.text == "done"
+    tool_message = _first_tool_message(provider.requests[1].messages)
+    assert tool_message is not None
+    assert "中间内容已截断" in tool_message.content
+    assert "BEGIN-" in tool_message.content
+    assert "-END" in tool_message.content
+    assert any(message.tool_calls == (call,) for message in provider.requests[1].messages)
+    assert "上下文已压缩" in caplog.text
+
+
+def test_main_loop_keeps_original_history_after_compacted_request(tmp_path) -> None:
+    first_call = ToolCall(id="call-1", name="fake_tool", arguments={"message": "ok"})
+    second_call = ToolCall(id="call-2", name="fake_tool", arguments={"message": "again"})
+    provider = FakeProvider(
+        responses=[
+            Message.assistant(tool_calls=(first_call,)),
+            Message.assistant(tool_calls=(second_call,)),
+            Message.assistant("done"),
+        ]
+    )
+    tools = ToolRegistry()
+    tools.register(LargeOutputTool())
+    engine = _build_engine(
+        provider=provider,
+        tools=tools,
+        workdir=tmp_path,
+        context_compactor=ContextCompactor(
+            max_chars=800,
+            retain_last_messages=2,
+            recent_tool_result_head_chars=8,
+            recent_tool_result_tail_chars=8,
+        ),
+    )
+
+    result = engine.run(prompt="use tool", max_steps=3, session=_session(tmp_path))
+
+    assert result.text == "done"
+    compacted_tool_message = _first_tool_message(provider.requests[1].messages)
+    third_request_tool_messages = [
+        message for message in provider.requests[2].messages if message.role is Role.TOOL
+    ]
+    assert compacted_tool_message is not None
+    assert "中间内容已截断" in compacted_tool_message.content
+    assert len(third_request_tool_messages) == 2
+    assert any("早期工具输出已清理" in message.content for message in third_request_tool_messages)
+    assert any("中间内容已截断" in message.content for message in third_request_tool_messages)
+
+
 def test_main_loop_stops_when_max_steps_exhausted(tmp_path) -> None:
     call = ToolCall(id="call-1", name="fake_tool", arguments={"message": "ok"})
     provider = FakeProvider(responses=[Message.assistant(content="thinking", tool_calls=(call,))])
@@ -516,10 +617,12 @@ def _build_engine(
     workdir: Path,
     memory: SessionMemoryStore | None = None,
     tools: ToolRegistry | None = None,
+    context_compactor: ContextCompactor | None = None,
 ) -> MainLoop:
     return MainLoop(
         provider=provider,
         context_builder=ContextBuilder(),
+        context_compactor=context_compactor or ContextCompactor(),
         memory=memory or SessionMemoryStore(workdir / "state"),
         tools=tools or ToolRegistry(),
     )
@@ -533,3 +636,10 @@ def _session(workdir: Path, *, name: str = "default") -> SessionRef:
         workdir=workdir.resolve(),
         display_name=name,
     )
+
+
+def _first_tool_message(messages: tuple[Message, ...]) -> Message | None:
+    for message in messages:
+        if message.role is Role.TOOL:
+            return message
+    return None

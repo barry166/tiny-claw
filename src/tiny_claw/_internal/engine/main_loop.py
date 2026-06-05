@@ -8,7 +8,7 @@ from enum import StrEnum
 from functools import partial
 from pathlib import Path
 
-from tiny_claw._internal.context.builder import ContextBuilder
+from tiny_claw._internal.context import ContextBuilder, ContextCompactor
 from tiny_claw._internal.engine import log_view
 from tiny_claw._internal.engine.channel import Channel, NullChannel, notify_channel
 from tiny_claw._internal.engine.tool_executor import ToolExecutor
@@ -53,6 +53,7 @@ class RunResult:
 class MainLoop:
     provider: LLMProvider
     context_builder: ContextBuilder
+    context_compactor: ContextCompactor
     memory: SessionMemoryStore
     tools: ToolRegistry
     _tool_executor: ToolExecutor = field(init=False, repr=False)
@@ -152,9 +153,20 @@ class MainLoop:
                 tool_choice=_to_tool_choice(tool_policy).value,
                 visible_tools=len(request_tool_definitions),
             )
+            compaction = self.context_compactor.compact(messages)
+            if compaction.changed or compaction.still_over_budget:
+                log_view.log_context_compaction(
+                    logger,
+                    original_chars=compaction.original_chars,
+                    compacted_chars=compaction.compacted_chars,
+                    max_chars=compaction.max_chars,
+                    masked_tool_results=compaction.masked_tool_results,
+                    truncated_tool_results=compaction.truncated_tool_results,
+                    still_over_budget=compaction.still_over_budget,
+                )
             response = self.provider.complete(
                 LLMRequest(
-                    messages=tuple(messages),
+                    messages=compaction.messages,
                     tools=request_tool_definitions,
                     max_steps=max_steps,
                     tool_choice=_to_tool_choice(tool_policy),

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from tiny_claw._internal.context.builder import ContextBuilder
+from tiny_claw._internal.context import ContextBuilder, ContextCompactor
 from tiny_claw._internal.engine.channel import Channel
 from tiny_claw._internal.engine.main_loop import MainLoop, RunMode, RunResult
 from tiny_claw._internal.errors import ConfigurationError
@@ -97,6 +97,13 @@ def build_application(
     engine = MainLoop(
         provider=resolved_provider,
         context_builder=ContextBuilder(workdir=settings.workdir),
+        context_compactor=ContextCompactor(
+            max_chars=settings.context_max_chars,
+            retain_last_messages=settings.context_retain_last_messages,
+            old_tool_result_mask_chars=settings.context_old_tool_result_mask_chars,
+            recent_tool_result_head_chars=settings.context_recent_tool_result_head_chars,
+            recent_tool_result_tail_chars=settings.context_recent_tool_result_tail_chars,
+        ),
         memory=memory,
         tools=tools,
     )

@@ -78,6 +78,32 @@ def log_model_request(
     )
 
 
+def log_context_compaction(
+    logger: logging.Logger,
+    *,
+    original_chars: int,
+    compacted_chars: int,
+    max_chars: int,
+    masked_tool_results: int,
+    truncated_tool_results: int,
+    still_over_budget: bool,
+) -> None:
+    level = logger.warning if still_over_budget else logger.info
+    level(
+        (
+            "%s original_chars=%s compacted_chars=%s max_chars=%s "
+            "masked_tool_results=%s truncated_tool_results=%s over_budget=%s"
+        ),
+        color("[Context] 上下文已压缩", COLOR_YELLOW),
+        original_chars,
+        compacted_chars,
+        max_chars,
+        masked_tool_results,
+        truncated_tool_results,
+        still_over_budget,
+    )
+
+
 def log_model_response(
     logger: logging.Logger,
     *,

@@ -20,6 +20,11 @@ SUPPORTED_TOOLS = {"bash", "edit", "read", "write"}
 DEFAULT_SERVER_HOST = "0.0.0.0"
 DEFAULT_SERVER_PORT = 8000
 DEFAULT_FEISHU_EVENT_PATH = "/api/events/feishu"
+DEFAULT_CONTEXT_MAX_CHARS = 120_000
+DEFAULT_CONTEXT_RETAIN_LAST_MESSAGES = 8
+DEFAULT_CONTEXT_OLD_TOOL_RESULT_MASK_CHARS = 240
+DEFAULT_CONTEXT_RECENT_TOOL_RESULT_HEAD_CHARS = 2_000
+DEFAULT_CONTEXT_RECENT_TOOL_RESULT_TAIL_CHARS = 2_000
 
 
 @dataclass(frozen=True)
@@ -41,6 +46,11 @@ class Settings:
     feishu_verification_token: str | None = None
     feishu_encrypt_key: str | None = None
     feishu_event_path: str = DEFAULT_FEISHU_EVENT_PATH
+    context_max_chars: int = DEFAULT_CONTEXT_MAX_CHARS
+    context_retain_last_messages: int = DEFAULT_CONTEXT_RETAIN_LAST_MESSAGES
+    context_old_tool_result_mask_chars: int = DEFAULT_CONTEXT_OLD_TOOL_RESULT_MASK_CHARS
+    context_recent_tool_result_head_chars: int = DEFAULT_CONTEXT_RECENT_TOOL_RESULT_HEAD_CHARS
+    context_recent_tool_result_tail_chars: int = DEFAULT_CONTEXT_RECENT_TOOL_RESULT_TAIL_CHARS
 
     @classmethod
     def from_env(
