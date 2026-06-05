@@ -7,7 +7,8 @@
 ## 设计原则
 
 - **入口薄**：`cli.py` 和 `server.py` 只把用户输入转换成统一调用，不承载 agent 业务逻辑。
-- **装配集中**：`app.py` 是 composition root，集中创建 settings、provider、memory、tools、engine，避免底层模块自己读取环境变量或 new 具体实现。
+- **装配集中**：`app.py` 是 composition root，集中创建 settings、provider、session、memory、tools、engine，避免底层模块自己读取环境变量或 new 具体实现。
+- **会话隔离**：`session` 负责把 CLI、飞书等入口映射为独立会话，保证不同入口和不同对话线不共用上下文记忆。
 - **编排稳定**：`engine` 只负责 ReAct 主循环、模式切换和停止条件，不关心 OpenAI/Claude SDK 细节，也不关心工具内部怎么做事。
 - **上下文独立**：`context` 只决定“模型本轮看到什么”，不调用模型、不执行工具。
 - **工具受控**：`tools` 封装能力，工具是否暴露由 `TINY_CLAW_ENABLED_TOOLS`、active skill 和主循环共同决定。
@@ -19,7 +20,8 @@
 flowchart TD
     Entry["入口适配层<br/>CLI / HTTP / Feishu<br/>只转换输入，不写业务"] --> App["装配层 app.py<br/>集中创建依赖<br/>隔离具体实现"]
 
-    App --> Engine["编排层 MainLoop<br/>只认识抽象协议<br/>不绑定厂商和工具实现"]
+    App --> Session["会话层 SessionManager<br/>生成 SessionRef<br/>隔离不同入口的对话记忆"]
+    Session --> Engine["编排层 MainLoop<br/>只认识抽象协议<br/>不持有 workdir"]
 
     Engine --> Context["上下文层 context<br/>决定模型看到什么<br/>不调用模型、不执行工具"]
     Context --> Prompt["PromptContext<br/>messages + selected_skills + allowed_tools"]
@@ -33,7 +35,7 @@ flowchart TD
     Tools --> ToolPolicy["权限收窄<br/>环境变量 enabled_tools<br/>Skill allowed-tools"]
     Tools --> Builtins["内置工具<br/>read / write / edit / bash"]
 
-    Engine --> Memory["Memory Store<br/>只存取记忆<br/>不决定上下文策略"]
+    Engine --> Memory["SessionMemoryStore<br/>按 session key 存取记忆<br/>不决定上下文策略"]
 
     Engine --> Channel["Channel<br/>进度事件输出<br/>CLI / Feishu 可替换"]
 ```
@@ -49,6 +51,7 @@ flowchart TD
 - `cli.py` 解析命令行参数，执行 `health`、`run`、`serve`。
 - `server.py` 创建 HTTP 服务，暴露 `/health` 和飞书事件回调入口。
 - 飞书事件最终也会落到 `Application.run()`，和 CLI 运行同一套 engine。
+- CLI `run --session <name>` 会把当前请求绑定到命名会话；不传时使用当前工作区的默认 CLI 会话。
 
 这一层不应该直接创建 provider、注册工具、执行工具或拼 prompt。它只负责接入协议和参数转换。未来新增 Slack、Web UI、REST API 时，应优先新增入口适配层，而不是修改 `MainLoop`。
 
@@ -58,11 +61,30 @@ flowchart TD
 
 - `Settings`：从环境变量和 `.env` 读取配置。
 - `LLMProvider`：按 provider 名称创建 `EchoProvider`、`OpenAIProvider` 或 `ClaudeProvider`。
-- `FileMemoryStore`：创建文件系统记忆存储。
+- `SessionManager`：把入口来源解析成 `SessionRef`，并写入会话元数据。
+- `SessionMemoryStore`：创建按 session key 隔离的文件系统记忆存储。
 - `ToolRegistry`：按 `TINY_CLAW_ENABLED_TOOLS` 注册工具。
-- `MainLoop`：注入 provider、context builder、memory、tools、workdir。
+- `MainLoop`：注入 provider、context builder、session memory、tools。
 
-这个设计让 engine 不需要知道配置从哪里来，也不需要知道 provider/tool 具体怎么构造。测试时可以直接注入 fake provider、fake memory、fake tools；外部集成也可以替换 provider，而不改变主循环。
+这个设计让 engine 不需要知道配置从哪里来，也不需要知道 provider/tool 具体怎么构造。`MainLoop` 不持有全局 `workdir`；本轮运行的 `workdir` 来自 `SessionRef`，再传给 `ContextBuilder` 读取 `AGENTS.md` 和 `.claw/skills`。测试时可以直接注入 fake provider、fake memory、fake tools；外部集成也可以替换 provider，而不改变主循环。
+
+### 会话层：`session/`
+
+会话层回答一个问题：**这次请求属于哪一条对话线？**
+
+主要模块：
+
+- `SessionRef`：本轮运行上下文，包含 `key`、`source`、`external_id`、`workdir` 和 `display_name`。
+- `SessionManager`：把入口来源解析为稳定会话，例如 CLI 默认会话、CLI 命名会话、飞书 chat 会话。
+- `SessionMemoryStore`：根据 `SessionRef.key` 读写 `state_dir/sessions/<session_key>/memory.jsonl`。
+
+当前会话规则：
+
+- CLI 默认：当前工作区的 `default` 会话。
+- CLI 命名：`tiny-claw run --session <name> "prompt"`。
+- 飞书：按 `chat_id` 隔离；不使用 `message_id`，因为它只代表单条消息。
+
+会话层不拼 prompt、不调用模型、不执行工具。它只负责让不同入口和不同对话线拥有独立 recent memory。
 
 ### 上下文层：`context/`
 
@@ -114,8 +136,8 @@ Skill 权限有一条关键规则：`allowed-tools` 只能收窄工具，不能�
 
 主循环的关键步骤：
 
-1. 读取 recent memory。
-2. 调用 `ContextBuilder` 生成 `PromptContext`。
+1. 通过 `SessionRef` 找到当前 session 的 recent memory。
+2. 调用 `ContextBuilder` 生成 `PromptContext`，其中 `workdir` 来自 `SessionRef.workdir`。
 3. 计算本轮最终可见工具。
 4. 请求 `LLMProvider.complete()`。
 5. 如果 assistant 没有 tool calls，记录记忆并返回最终结果。
@@ -170,11 +192,22 @@ Provider 层负责厂商适配。engine 只认识内部协议：
 
 ### Memory 层：`memory/`
 
-Memory 层当前是轻量文件系统存储。
+Memory 层当前是轻量文件系统存储。会话隔离由 `session/` 负责，底层仍复用简单 JSONL 记忆格式。
 
 - `FileMemoryStore.append()` 追加 JSONL 记录。
 - `FileMemoryStore.read_recent()` 读取最近 N 条记忆。
-- `MainLoop` 在 run 结束时记录 `last_prompt` 和 `last_response`。
+- `SessionMemoryStore` 为每个 `SessionRef` 选择独立目录。
+- `MainLoop` 在 run 结束时向当前 session 记录 `last_prompt` 和 `last_response`。
+
+当前存储形态：
+
+```text
+state_dir/
+  sessions/
+    <session_key>/
+      memory.jsonl
+      meta.json
+```
 
 Memory 不决定哪些内容进入模型上下文。它只提供数据；是否注入、怎么注入由 context 层决定。
 
@@ -188,7 +221,7 @@ Memory 不决定哪些内容进入模型上下文。它只提供数据；是否�
 - `FeishuSdkMessageSender` 负责向飞书会话发送文本。
 - `FeishuChannel` 实现 engine `Channel` 协议，接收开始、思考、工具调用、工具结果、完成等进度事件。
 
-飞书层不直接调用工具、不直接访问 provider，也不拼上下文。它只把外部事件转换为 `Application.run()`，再把 engine 事件转回飞书消息。
+飞书层不直接调用工具、不直接访问 provider，也不拼上下文。它只把外部事件转换为 `SessionManager.resolve_feishu_chat(chat_id)` 和 `Application.run()`，再把 engine 事件转回飞书消息。
 
 这个设计让未来接入其他平台时可以复用 `Application` 和 `MainLoop`，只新增平台 adapter 和 channel。
 
@@ -200,8 +233,9 @@ Memory 不决定哪些内容进入模型上下文。它只提供数据；是否�
 tiny-claw run
   -> cli.py 解析参数
   -> build_application(settings)
-  -> Application.run()
-  -> MainLoop.run()
+  -> SessionManager.resolve_cli()
+  -> Application.run(session)
+  -> MainLoop.run(session)
   -> ContextBuilder.build()
   -> Provider.complete()
   -> ToolExecutor.run_tool_calls() 可选
@@ -214,8 +248,9 @@ tiny-claw run
 飞书 webhook
   -> server.py HTTP endpoint
   -> FeishuEventAdapter._on_message()
+  -> SessionManager.resolve_feishu_chat(chat_id)
   -> Application.run(channel=FeishuChannel)
-  -> MainLoop.run()
+  -> MainLoop.run(session)
   -> FeishuChannel 推送进度与最终回复
 ```
 

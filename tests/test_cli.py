@@ -5,6 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from tiny_claw._internal.session import SessionManager
 from tiny_claw.cli import main
 
 
@@ -44,6 +45,28 @@ def test_run_command_uses_echo_provider(capsys, monkeypatch, tmp_path) -> None:
 
     assert exit_code == 0
     assert capsys.readouterr().out.strip() == "hello"
+
+
+def test_run_command_isolates_named_sessions(capsys, monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("TINY_CLAW_STATE_DIR", str(tmp_path / "state"))
+
+    first_exit = main(["run", "--session", "first", "hello first"])
+    second_exit = main(["run", "--session", "second", "hello second"])
+
+    capsys.readouterr()
+    manager = SessionManager(state_dir=tmp_path / "state", workdir=Path.cwd())
+    first = manager.resolve_cli("first")
+    second = manager.resolve_cli("second")
+    assert first_exit == 0
+    assert second_exit == 0
+    assert manager.memory_store(first).read_recent(limit=2) == (
+        "last_prompt: hello first",
+        "last_response: hello first",
+    )
+    assert manager.memory_store(second).read_recent(limit=2) == (
+        "last_prompt: hello second",
+        "last_response: hello second",
+    )
 
 
 def test_python_module_entrypoint_shows_help(tmp_path) -> None:

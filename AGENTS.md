@@ -24,6 +24,7 @@
 - `src/tiny_claw/_internal/engine/`：主循环编排。
 - `src/tiny_claw/_internal/provider/`：大模型 provider 抽象和具体厂商适配。
 - `src/tiny_claw/_internal/context/`：Prompt / 上下文构建和 token 辅助逻辑。
+- `src/tiny_claw/_internal/session/`：会话解析和按入口隔离的上下文记忆。
 - `src/tiny_claw/_internal/tools/`：工具注册表、中间件和内置工具骨架。
 - `src/tiny_claw/_internal/memory/`：基于文件系统的记忆与状态存储。
 - `src/tiny_claw/_internal/integrations/`：外部系统集成，例如飞书。
@@ -41,6 +42,7 @@
 uv run tiny-claw --help
 uv run tiny-claw health
 uv run tiny-claw run "hello"
+uv run tiny-claw run --session debug-login "继续这个调试会话"
 uv run tiny-claw run --mode think "先分析并制定计划"
 uv run tiny-claw run --mode plan-act "先规划再执行"
 uv run tiny-claw serve --host 0.0.0.0 --port 8000
@@ -83,6 +85,7 @@ uv run tiny-claw serve --host 0.0.0.0 --port 8000
 - `run --mode think` 用于先分析 / 先计划场景，主循环不会向模型暴露工具定义，也会阻止意外工具调用。
 - `run --mode plan-act` 会先隐藏工具完成规划，再自动进入 ReAct 执行阶段；规划轮计入 `--max-steps`。
 - `run --mode act` 是默认 ReAct 执行模式，会按工具策略向 provider 传递工具定义。
+- `run --session <name>` 用于隔离 CLI 会话记忆；飞书入口按 `chat_id` 自动隔离。
 - `engine` 相关测试应优先使用依赖注入，方便注入 fake provider、fake memory、fake
   tools。
 - 源码保持 `src/` layout，测试保持在 `tests/`。

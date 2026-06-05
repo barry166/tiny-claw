@@ -117,6 +117,88 @@ async def _run_feishu_event_adapter_dispatches_background_run(tmp_path) -> None:
     )
 
 
+def test_feishu_event_adapter_uses_chat_session_memory(tmp_path) -> None:
+    asyncio.run(_run_feishu_event_adapter_uses_chat_session_memory(tmp_path))
+
+
+async def _run_feishu_event_adapter_uses_chat_session_memory(tmp_path) -> None:
+    app = build_application(Settings.from_env({"TINY_CLAW_STATE_DIR": str(tmp_path)}))
+    sdk_channel = RecordingSdkChannel()
+    adapter = FeishuEventAdapter(
+        app=app,
+        sdk_channel=sdk_channel,
+        max_steps=1,
+        mode=RunMode.ACT,
+    )
+
+    await adapter._on_message(
+        FakeInboundMessage(
+            content=FakeContent(kind="text"),
+            content_text="first message",
+            chat_id="chat-a",
+        )
+    )
+    await asyncio.sleep(0.05)
+    await adapter._on_message(
+        FakeInboundMessage(
+            content=FakeContent(kind="text"),
+            content_text="second message",
+            chat_id="chat-a",
+        )
+    )
+    await asyncio.sleep(0.05)
+
+    session = app.session_manager.resolve_feishu_chat("chat-a")
+    assert app.session_manager.memory_store(session).read_recent(limit=4) == (
+        "last_prompt: first message",
+        "last_response: first message",
+        "last_prompt: second message",
+        "last_response: second message",
+    )
+
+
+def test_feishu_event_adapter_isolates_different_chat_sessions(tmp_path) -> None:
+    asyncio.run(_run_feishu_event_adapter_isolates_different_chat_sessions(tmp_path))
+
+
+async def _run_feishu_event_adapter_isolates_different_chat_sessions(tmp_path) -> None:
+    app = build_application(Settings.from_env({"TINY_CLAW_STATE_DIR": str(tmp_path)}))
+    sdk_channel = RecordingSdkChannel()
+    adapter = FeishuEventAdapter(
+        app=app,
+        sdk_channel=sdk_channel,
+        max_steps=1,
+        mode=RunMode.ACT,
+    )
+
+    await adapter._on_message(
+        FakeInboundMessage(
+            content=FakeContent(kind="text"),
+            content_text="hello a",
+            chat_id="chat-a",
+        )
+    )
+    await adapter._on_message(
+        FakeInboundMessage(
+            content=FakeContent(kind="text"),
+            content_text="hello b",
+            chat_id="chat-b",
+        )
+    )
+    await asyncio.sleep(0.05)
+
+    session_a = app.session_manager.resolve_feishu_chat("chat-a")
+    session_b = app.session_manager.resolve_feishu_chat("chat-b")
+    assert app.session_manager.memory_store(session_a).read_recent(limit=2) == (
+        "last_prompt: hello a",
+        "last_response: hello a",
+    )
+    assert app.session_manager.memory_store(session_b).read_recent(limit=2) == (
+        "last_prompt: hello b",
+        "last_response: hello b",
+    )
+
+
 def test_feishu_event_adapter_replies_with_runtime_error_without_app() -> None:
     asyncio.run(_run_feishu_event_adapter_replies_with_runtime_error_without_app())
 

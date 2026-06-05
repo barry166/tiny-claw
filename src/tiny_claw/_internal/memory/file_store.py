@@ -5,6 +5,9 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Lock
+
+_WRITE_LOCK = Lock()
 
 
 @dataclass(frozen=True)
@@ -18,7 +21,7 @@ class FileMemoryStore:
     def append(self, key: str, value: str) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
         payload = {"key": key, "value": value}
-        with self.path.open("a", encoding="utf-8") as file:
+        with _WRITE_LOCK, self.path.open("a", encoding="utf-8") as file:
             file.write(json.dumps(payload, ensure_ascii=True) + "\n")
 
     def read_recent(self, *, limit: int) -> tuple[str, ...]:

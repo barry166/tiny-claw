@@ -32,17 +32,24 @@ def log_run_start(
     mode: str,
     max_steps: int,
     workdir: Path,
+    session_key: str,
+    session_source: str,
     registered_tools: int,
     memories: int,
 ) -> None:
     logger.info(
-        "%s provider=%s mode=%s max_steps=%s tools=%s memories=%s\n%s workdir=%s",
+        (
+            "%s provider=%s mode=%s max_steps=%s tools=%s memories=%s "
+            "session=%s source=%s\n%s workdir=%s"
+        ),
         color("[Engine] 主循环开始", COLOR_CYAN),
         provider,
         mode,
         max_steps,
         registered_tools,
         memories,
+        session_key,
+        session_source,
         color("[WorkDir]", COLOR_DIM),
         workdir,
     )

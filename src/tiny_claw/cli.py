@@ -65,6 +65,11 @@ def build_parser() -> argparse.ArgumentParser:
             "'plan-act' plans first, then acts."
         ),
     )
+    run_parser.add_argument(
+        "--session",
+        default=None,
+        help="Named CLI session for isolating conversation memory.",
+    )
     run_parser.set_defaults(handler=_handle_run)
 
     serve_parser = subparsers.add_parser("serve", help="Start the unified HTTP event server.")
@@ -129,10 +134,12 @@ def _handle_health(_args: argparse.Namespace, app: Application) -> int:
 
 
 def _handle_run(args: argparse.Namespace, app: Application) -> int:
+    session = app.session_manager.resolve_cli(args.session)
     result = app.run(
         prompt=args.prompt,
         max_steps=args.max_steps,
         mode=RunMode(args.mode),
+        session=session,
     )
     print(result.text)
     return int(ExitCode.OK)

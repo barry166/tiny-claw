@@ -9,11 +9,11 @@ from tiny_claw._internal.context.builder import ContextBuilder
 from tiny_claw._internal.engine.channel import Channel
 from tiny_claw._internal.engine.main_loop import MainLoop, RunMode, RunResult
 from tiny_claw._internal.errors import ConfigurationError
-from tiny_claw._internal.memory.file_store import FileMemoryStore
 from tiny_claw._internal.provider.base import LLMProvider
 from tiny_claw._internal.provider.claude import ClaudeProvider
 from tiny_claw._internal.provider.echo import EchoProvider
 from tiny_claw._internal.provider.openai import OpenAIProvider
+from tiny_claw._internal.session import SessionManager, SessionMemoryStore, SessionRef
 from tiny_claw._internal.settings import DEFAULT_OPENAI_MODEL, Settings
 from tiny_claw._internal.tools.base import Tool
 from tiny_claw._internal.tools.builtin.bash import BashTool
@@ -47,6 +47,7 @@ class Application:
     settings: Settings
     engine: MainLoop
     tools: ToolRegistry
+    session_manager: SessionManager
 
     def health(self) -> HealthReport:
         return HealthReport(
@@ -63,9 +64,22 @@ class Application:
         prompt: str,
         max_steps: int,
         mode: RunMode = RunMode.ACT,
+        session: SessionRef | None = None,
         channel: Channel | None = None,
     ) -> RunResult:
-        return self.engine.run(prompt=prompt, max_steps=max_steps, mode=mode, channel=channel)
+        resolved_session = session or self.session_manager.resolve_cli(None)
+        if resolved_session.workdir.resolve() != self.settings.workdir.resolve():
+            raise ValueError(
+                "session workdir must match application workdir because tools are "
+                "registered for the application workdir"
+            )
+        return self.engine.run(
+            prompt=prompt,
+            max_steps=max_steps,
+            mode=mode,
+            session=resolved_session,
+            channel=channel,
+        )
 
 
 def build_application(
@@ -74,16 +88,24 @@ def build_application(
     provider: LLMProvider | None = None,
 ) -> Application:
     resolved_provider = provider if provider is not None else _build_provider(settings)
-    memory = FileMemoryStore(settings.state_dir)
+    session_manager = SessionManager(
+        state_dir=settings.state_dir,
+        workdir=settings.workdir,
+    )
+    memory = SessionMemoryStore(settings.state_dir)
     tools = _build_tool_registry(settings.workdir, enabled_tools=settings.enabled_tools)
     engine = MainLoop(
         provider=resolved_provider,
         context_builder=ContextBuilder(workdir=settings.workdir),
         memory=memory,
         tools=tools,
-        workdir=settings.workdir,
     )
-    return Application(settings=settings, engine=engine, tools=tools)
+    return Application(
+        settings=settings,
+        engine=engine,
+        tools=tools,
+        session_manager=session_manager,
+    )
 
 
 def build_integration_application(settings: Settings) -> Application:

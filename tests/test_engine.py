@@ -12,9 +12,9 @@ from tiny_claw._internal.engine.main_loop import (
     RunMode,
     ToolPolicy,
 )
-from tiny_claw._internal.memory.file_store import FileMemoryStore
 from tiny_claw._internal.provider.base import LLMRequest, LLMResponse, ToolChoice
 from tiny_claw._internal.schema.message import Message, Role, ToolCall, ToolDefinition
+from tiny_claw._internal.session import SessionMemoryStore, SessionRef
 from tiny_claw._internal.tools.base import ToolInput, ToolOutput
 from tiny_claw._internal.tools.builtin.bash import BashTool
 from tiny_claw._internal.tools.builtin.edit import EditTool
@@ -67,11 +67,12 @@ class FakeTool:
 
 
 def test_main_loop_accepts_injected_components(tmp_path) -> None:
-    memory = FileMemoryStore(tmp_path / "state")
+    memory = SessionMemoryStore(tmp_path / "state")
     provider = FakeProvider()
     engine = _build_engine(provider=provider, memory=memory, workdir=tmp_path)
+    session = _session(tmp_path)
 
-    result = engine.run(prompt="ping")
+    result = engine.run(prompt="ping", session=session)
 
     assert result.text == "fake response"
     assert result.provider == "fake"
@@ -81,7 +82,7 @@ def test_main_loop_accepts_injected_components(tmp_path) -> None:
     assert result.stop_reason == STOP_REASON_FINAL
     assert result.mode is RunMode.ACT
     assert result.tool_policy is ToolPolicy.AUTO
-    assert memory.read_recent(limit=2) == (
+    assert memory.for_session(session).read_recent(limit=2) == (
         "last_prompt: ping",
         "last_response: fake response",
     )
@@ -95,7 +96,7 @@ def test_main_loop_sends_tool_definitions(tmp_path) -> None:
     tools.register(FakeTool())
     engine = _build_engine(provider=provider, tools=tools, workdir=tmp_path)
 
-    engine.run(prompt="ping", max_steps=1)
+    engine.run(prompt="ping", max_steps=1, session=_session(tmp_path))
 
     assert provider.requests[0].tools == (FakeTool().definition(),)
     assert provider.requests[0].tool_choice is ToolChoice.AUTO
@@ -120,7 +121,7 @@ allowed-tools: read
     tools.register(WriteTool(root=tmp_path))
     engine = _build_engine(provider=provider, tools=tools, workdir=tmp_path)
 
-    engine.run(prompt="$read-only inspect", max_steps=1)
+    engine.run(prompt="$read-only inspect", max_steps=1, session=_session(tmp_path))
 
     assert provider.requests[0].tools == (ReadTool(root=tmp_path).definition(),)
 
@@ -143,7 +144,7 @@ description: Git workflow
     tools.register(ReadTool(root=tmp_path))
     engine = _build_engine(provider=provider, tools=tools, workdir=tmp_path)
 
-    engine.run(prompt="$git-workflow commit", max_steps=1)
+    engine.run(prompt="$git-workflow commit", max_steps=1, session=_session(tmp_path))
 
     assert provider.requests[0].tools == (
         BashTool(workdir=tmp_path).definition(),
@@ -157,7 +158,12 @@ def test_main_loop_hides_tools_in_think_mode(tmp_path) -> None:
     tools.register(FakeTool())
     engine = _build_engine(provider=provider, tools=tools, workdir=tmp_path)
 
-    result = engine.run(prompt="analyze only", max_steps=1, mode=RunMode.THINK)
+    result = engine.run(
+        prompt="analyze only",
+        max_steps=1,
+        mode=RunMode.THINK,
+        session=_session(tmp_path),
+    )
 
     assert result.stop_reason == STOP_REASON_FINAL
     assert result.mode is RunMode.THINK
@@ -178,7 +184,7 @@ def test_main_loop_runs_tool_observation_then_next_turn(tmp_path) -> None:
     tools.register(FakeTool())
     engine = _build_engine(provider=provider, tools=tools, workdir=tmp_path)
 
-    result = engine.run(prompt="use tool", max_steps=2)
+    result = engine.run(prompt="use tool", max_steps=2, session=_session(tmp_path))
 
     assert result.text == "done"
     assert result.steps == 2
@@ -216,6 +222,7 @@ def test_main_loop_can_read_file_then_return_summary(tmp_path) -> None:
     result = engine.run(
         prompt=prompt,
         max_steps=2,
+        session=_session(tmp_path),
     )
 
     assert result.text == "hello.txt 说 tiny-claw 已经具备读取工作区文件的能力。"
@@ -247,7 +254,7 @@ def test_main_loop_can_write_file_then_return_summary(tmp_path) -> None:
     tools.register(WriteTool(root=tmp_path))
     engine = _build_engine(provider=provider, tools=tools, workdir=tmp_path)
 
-    result = engine.run(prompt="写入 notes.txt", max_steps=2)
+    result = engine.run(prompt="写入 notes.txt", max_steps=2, session=_session(tmp_path))
 
     assert result.text == "notes.txt 已经写入。"
     assert (tmp_path / "notes.txt").read_text(encoding="utf-8") == "hello\n"
@@ -277,7 +284,7 @@ def test_main_loop_can_edit_file_then_return_summary(tmp_path) -> None:
     tools.register(EditTool(root=tmp_path))
     engine = _build_engine(provider=provider, tools=tools, workdir=tmp_path)
 
-    result = engine.run(prompt="替换 notes.txt", max_steps=2)
+    result = engine.run(prompt="替换 notes.txt", max_steps=2, session=_session(tmp_path))
 
     assert result.text == "notes.txt 已经局部替换。"
     assert (tmp_path / "notes.txt").read_text(encoding="utf-8") == "alpha\nbravo\ngamma\n"
@@ -319,7 +326,11 @@ def test_main_loop_can_read_then_edit_existing_code_file(tmp_path) -> None:
     tools.register(EditTool(root=tmp_path))
     engine = _build_engine(provider=provider, tools=tools, workdir=tmp_path)
 
-    result = engine.run(prompt="读取 greeting.py 并把问候语改成 Hi", max_steps=3)
+    result = engine.run(
+        prompt="读取 greeting.py 并把问候语改成 Hi",
+        max_steps=3,
+        session=_session(tmp_path),
+    )
 
     assert result.text == "greeting.py 已读取并完成局部替换。"
     assert result.stop_reason == STOP_REASON_FINAL
@@ -364,7 +375,7 @@ def test_main_loop_returns_bash_error_observation_for_self_correction(tmp_path) 
     tools.register(BashTool(workdir=tmp_path))
     engine = _build_engine(provider=provider, tools=tools, workdir=tmp_path)
 
-    result = engine.run(prompt="检查 missing-file", max_steps=2)
+    result = engine.run(prompt="检查 missing-file", max_steps=2, session=_session(tmp_path))
 
     assert result.text == "命令失败，因为文件不存在。"
     assert any(
@@ -384,7 +395,7 @@ def test_main_loop_stops_when_max_steps_exhausted(tmp_path) -> None:
     tools.register(FakeTool())
     engine = _build_engine(provider=provider, tools=tools, workdir=tmp_path)
 
-    result = engine.run(prompt="use tool", max_steps=1)
+    result = engine.run(prompt="use tool", max_steps=1, session=_session(tmp_path))
 
     assert result.text == "thinking"
     assert result.steps == 1
@@ -400,7 +411,12 @@ def test_main_loop_blocks_tool_calls_in_think_mode(tmp_path) -> None:
     tools.register(FakeTool())
     engine = _build_engine(provider=provider, tools=tools, workdir=tmp_path)
 
-    result = engine.run(prompt="analyze only", max_steps=2, mode=RunMode.THINK)
+    result = engine.run(
+        prompt="analyze only",
+        max_steps=2,
+        mode=RunMode.THINK,
+        session=_session(tmp_path),
+    )
 
     assert result.text == "thinking"
     assert result.steps == 1
@@ -421,7 +437,12 @@ def test_main_loop_plan_act_plans_then_exposes_tools(tmp_path) -> None:
     tools.register(FakeTool())
     engine = _build_engine(provider=provider, tools=tools, workdir=tmp_path)
 
-    result = engine.run(prompt="plan then act", max_steps=2, mode=RunMode.PLAN_ACT)
+    result = engine.run(
+        prompt="plan then act",
+        max_steps=2,
+        mode=RunMode.PLAN_ACT,
+        session=_session(tmp_path),
+    )
 
     assert result.text == "done"
     assert result.steps == 2
@@ -448,7 +469,12 @@ def test_main_loop_plan_act_counts_planning_toward_max_steps(tmp_path) -> None:
     tools.register(FakeTool())
     engine = _build_engine(provider=provider, tools=tools, workdir=tmp_path)
 
-    result = engine.run(prompt="plan then act", max_steps=1, mode=RunMode.PLAN_ACT)
+    result = engine.run(
+        prompt="plan then act",
+        max_steps=1,
+        mode=RunMode.PLAN_ACT,
+        session=_session(tmp_path),
+    )
 
     assert result.text == "plan only"
     assert result.steps == 1
@@ -468,7 +494,12 @@ def test_main_loop_plan_act_blocks_tool_calls_during_plan(tmp_path) -> None:
     tools.register(FakeTool())
     engine = _build_engine(provider=provider, tools=tools, workdir=tmp_path)
 
-    result = engine.run(prompt="plan then act", max_steps=2, mode=RunMode.PLAN_ACT)
+    result = engine.run(
+        prompt="plan then act",
+        max_steps=2,
+        mode=RunMode.PLAN_ACT,
+        session=_session(tmp_path),
+    )
 
     assert result.text == "plan"
     assert result.steps == 1
@@ -483,13 +514,22 @@ def _build_engine(
     *,
     provider: FakeProvider,
     workdir: Path,
-    memory: FileMemoryStore | None = None,
+    memory: SessionMemoryStore | None = None,
     tools: ToolRegistry | None = None,
 ) -> MainLoop:
     return MainLoop(
         provider=provider,
         context_builder=ContextBuilder(),
-        memory=memory or FileMemoryStore(workdir / "state"),
+        memory=memory or SessionMemoryStore(workdir / "state"),
         tools=tools or ToolRegistry(),
-        workdir=workdir,
+    )
+
+
+def _session(workdir: Path, *, name: str = "default") -> SessionRef:
+    return SessionRef(
+        key=f"test-{name}",
+        source="test",
+        external_id=name,
+        workdir=workdir.resolve(),
+        display_name=name,
     )

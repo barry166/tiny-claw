@@ -118,12 +118,14 @@ class FeishuEventAdapter:
             return
 
         channel = FeishuChannel(sender=sender)
+        session = self.app.session_manager.resolve_feishu_chat(message.chat_id)
         task = asyncio.create_task(
             asyncio.to_thread(
                 self.app.run,
                 prompt=text,
                 max_steps=self.max_steps,
                 mode=self.mode,
+                session=session,
                 channel=channel,
             )
         )

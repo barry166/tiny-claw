@@ -15,6 +15,7 @@ from tiny_claw._internal.engine.tool_executor import ToolExecutor
 from tiny_claw._internal.memory.file_store import FileMemoryStore
 from tiny_claw._internal.provider.base import LLMProvider, LLMRequest, ToolChoice
 from tiny_claw._internal.schema.message import Message
+from tiny_claw._internal.session import SessionMemoryStore, SessionRef
 from tiny_claw._internal.tools.registry import ToolRegistry
 
 STOP_REASON_FINAL = "final"
@@ -52,9 +53,8 @@ class RunResult:
 class MainLoop:
     provider: LLMProvider
     context_builder: ContextBuilder
-    memory: FileMemoryStore
+    memory: SessionMemoryStore
     tools: ToolRegistry
-    workdir: Path
     _tool_executor: ToolExecutor = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -70,6 +70,7 @@ class MainLoop:
         prompt: str,
         max_steps: int = 20,
         mode: RunMode = RunMode.ACT,
+        session: SessionRef,
         channel: Channel | None = None,
     ) -> RunResult:
         if max_steps < 1:
@@ -84,11 +85,12 @@ class MainLoop:
                 max_steps=max_steps,
             )
         )
-        recent_memory = self.memory.read_recent(limit=5)
+        session_memory = self.memory.for_session(session)
+        recent_memory = session_memory.read_recent(limit=5)
         context = self.context_builder.build(
             prompt=prompt,
             memories=recent_memory,
-            workdir=self.workdir,
+            workdir=session.workdir,
         )
         messages = list(context.messages)
         registered_tool_definitions = self.tools.definitions()
@@ -108,7 +110,9 @@ class MainLoop:
             provider=self.provider.name,
             mode=mode.value,
             max_steps=max_steps,
-            workdir=self.workdir,
+            workdir=session.workdir,
+            session_key=session.key,
+            session_source=session.source,
             registered_tools=len(registered_tool_definitions),
             memories=len(recent_memory),
         )
@@ -181,7 +185,11 @@ class MainLoop:
                         "规划阶段收到工具调用 tool_calls=%s，已阻止进入执行阶段",
                         tool_call_count,
                     )
-                    self._record_run(prompt=prompt, response=last_text)
+                    self._record_run(
+                        memory=session_memory,
+                        prompt=prompt,
+                        response=last_text,
+                    )
                     log_view.log_run_return(
                         logger,
                         text=last_text,
@@ -200,7 +208,7 @@ class MainLoop:
                         provider=last_provider,
                         steps=step,
                         max_steps=max_steps,
-                        workdir=self.workdir,
+                        workdir=session.workdir,
                         stop_reason=STOP_REASON_TOOL_POLICY_BLOCKED,
                         mode=mode,
                         tool_policy=tool_policy,
@@ -208,7 +216,11 @@ class MainLoop:
                     )
 
                 if step == max_steps:
-                    self._record_run(prompt=prompt, response=last_text)
+                    self._record_run(
+                        memory=session_memory,
+                        prompt=prompt,
+                        response=last_text,
+                    )
                     logger.warning(
                         "主循环结束 reason=%s steps=%s provider=%s mode=%s phase=%s",
                         STOP_REASON_MAX_STEPS_EXHAUSTED,
@@ -245,7 +257,7 @@ class MainLoop:
                         provider=last_provider,
                         steps=step,
                         max_steps=max_steps,
-                        workdir=self.workdir,
+                        workdir=session.workdir,
                         stop_reason=STOP_REASON_MAX_STEPS_EXHAUSTED,
                         mode=mode,
                         tool_policy=tool_policy,
@@ -266,7 +278,11 @@ class MainLoop:
                 continue
 
             if not response.message.tool_calls:
-                self._record_run(prompt=prompt, response=last_text)
+                self._record_run(
+                    memory=session_memory,
+                    prompt=prompt,
+                    response=last_text,
+                )
                 log_view.log_run_complete(
                     logger,
                     provider=last_provider,
@@ -295,7 +311,7 @@ class MainLoop:
                     provider=last_provider,
                     steps=step,
                     max_steps=max_steps,
-                    workdir=self.workdir,
+                    workdir=session.workdir,
                     stop_reason=STOP_REASON_FINAL,
                     mode=mode,
                     tool_policy=tool_policy,
@@ -307,7 +323,11 @@ class MainLoop:
                     "模型在禁用工具策略下仍返回工具调用 tool_calls=%s，已阻止执行",
                     tool_call_count,
                 )
-                self._record_run(prompt=prompt, response=last_text)
+                self._record_run(
+                    memory=session_memory,
+                    prompt=prompt,
+                    response=last_text,
+                )
                 log_view.log_run_return(
                     logger,
                     text=last_text,
@@ -326,7 +346,7 @@ class MainLoop:
                     provider=last_provider,
                     steps=step,
                     max_steps=max_steps,
-                    workdir=self.workdir,
+                    workdir=session.workdir,
                     stop_reason=STOP_REASON_TOOL_POLICY_BLOCKED,
                     mode=mode,
                     tool_policy=tool_policy,
@@ -340,7 +360,11 @@ class MainLoop:
                 )
             )
 
-        self._record_run(prompt=prompt, response=last_text)
+        self._record_run(
+            memory=session_memory,
+            prompt=prompt,
+            response=last_text,
+        )
         log_view.log_run_complete(
             logger,
             provider=last_provider,
@@ -369,16 +393,16 @@ class MainLoop:
             provider=last_provider,
             steps=max_steps,
             max_steps=max_steps,
-            workdir=self.workdir,
+            workdir=session.workdir,
             stop_reason=STOP_REASON_MAX_STEPS_EXHAUSTED,
             mode=mode,
             tool_policy=tool_policy,
             plan=plan,
         )
 
-    def _record_run(self, *, prompt: str, response: str) -> None:
-        self.memory.append("last_prompt", prompt)
-        self.memory.append("last_response", response)
+    def _record_run(self, *, memory: FileMemoryStore, prompt: str, response: str) -> None:
+        memory.append("last_prompt", prompt)
+        memory.append("last_response", response)
         logger.info(
             "运行记忆已记录 prompt_chars=%s response_chars=%s",
             len(prompt),
