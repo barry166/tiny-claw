@@ -66,7 +66,7 @@ def test_feishu_event_adapter_starts_and_forwards_webhook_request(tmp_path) -> N
 
 
 async def _run_feishu_event_adapter_starts_and_forwards_webhook_request(tmp_path) -> None:
-    app = build_application(Settings.from_env({"TINY_CLAW_STATE_DIR": str(tmp_path)}))
+    app = build_application(_echo_settings(tmp_path))
     sdk_channel = RecordingSdkChannel()
     adapter = FeishuEventAdapter(
         app=app,
@@ -93,7 +93,7 @@ def test_feishu_event_adapter_dispatches_background_run(tmp_path) -> None:
 
 
 async def _run_feishu_event_adapter_dispatches_background_run(tmp_path) -> None:
-    app = build_application(Settings.from_env({"TINY_CLAW_STATE_DIR": str(tmp_path)}))
+    app = build_application(_echo_settings(tmp_path))
     sdk_channel = RecordingSdkChannel()
     adapter = FeishuEventAdapter(
         app=app,
@@ -122,7 +122,7 @@ def test_feishu_event_adapter_uses_chat_session_memory(tmp_path) -> None:
 
 
 async def _run_feishu_event_adapter_uses_chat_session_memory(tmp_path) -> None:
-    app = build_application(Settings.from_env({"TINY_CLAW_STATE_DIR": str(tmp_path)}))
+    app = build_application(_echo_settings(tmp_path))
     sdk_channel = RecordingSdkChannel()
     adapter = FeishuEventAdapter(
         app=app,
@@ -162,7 +162,7 @@ def test_feishu_event_adapter_isolates_different_chat_sessions(tmp_path) -> None
 
 
 async def _run_feishu_event_adapter_isolates_different_chat_sessions(tmp_path) -> None:
-    app = build_application(Settings.from_env({"TINY_CLAW_STATE_DIR": str(tmp_path)}))
+    app = build_application(_echo_settings(tmp_path))
     sdk_channel = RecordingSdkChannel()
     adapter = FeishuEventAdapter(
         app=app,
@@ -238,6 +238,7 @@ async def _run_server_health_and_feishu_endpoint(monkeypatch, tmp_path) -> None:
     app = build_application(
         Settings.from_env(
             {
+                "TINY_CLAW_PROVIDER": "echo",
                 "TINY_CLAW_STATE_DIR": str(tmp_path),
                 "FEISHU_APP_ID": "cli_xxx",
                 "FEISHU_APP_SECRET": "secret",
@@ -245,7 +246,7 @@ async def _run_server_health_and_feishu_endpoint(monkeypatch, tmp_path) -> None:
         )
     )
     sdk_channel = RecordingSdkChannel()
-    integration_app = build_application(Settings.from_env({"TINY_CLAW_STATE_DIR": str(tmp_path)}))
+    integration_app = build_application(_echo_settings(tmp_path))
 
     def fake_from_settings(**kwargs: Any) -> FeishuEventAdapter:
         assert kwargs["app"] is integration_app
@@ -306,6 +307,7 @@ async def _run_server_starts_with_feishu_configuration_without_openai_key(
     app = build_application(
         Settings.from_env(
             {
+                "TINY_CLAW_PROVIDER": "echo",
                 "TINY_CLAW_STATE_DIR": str(tmp_path),
                 "FEISHU_APP_ID": "cli_xxx",
                 "FEISHU_APP_SECRET": "secret",
@@ -366,7 +368,7 @@ def test_server_starts_without_feishu_configuration(tmp_path) -> None:
 
 
 async def _run_server_starts_without_feishu_configuration(tmp_path) -> None:
-    app = build_application(Settings.from_env({"TINY_CLAW_STATE_DIR": str(tmp_path)}))
+    app = build_application(_echo_settings(tmp_path))
     web_app = build_web_app(
         app,
         ServerConfig(
@@ -423,6 +425,15 @@ class RecordingSdkChannel:
     async def send(self, to: object, message: object, opts: object = None) -> object:
         self.sent.append((to, message, opts))
         return object()
+
+
+def _echo_settings(tmp_path) -> Settings:
+    return Settings.from_env(
+        {
+            "TINY_CLAW_PROVIDER": "echo",
+            "TINY_CLAW_STATE_DIR": str(tmp_path),
+        }
+    )
 
 
 @dataclass(frozen=True)

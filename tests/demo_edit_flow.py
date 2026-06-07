@@ -36,12 +36,10 @@ EXPECTED_FILE = (
 def main() -> int:
     base_settings = Settings.from_env()
     if base_settings.provider_name == "echo":
-        print("This demo needs a real provider, not the default echo provider.")
+        print("This demo needs a real provider, not echo.")
         print("")
         print("Example:")
-        print(
-            "  TINY_CLAW_PROVIDER=openai OPENAI_API_KEY=... uv run python tests/demo_edit_flow.py"
-        )
+        print("  OPENAI_API_KEY=... uv run python tests/demo_edit_flow.py")
         print(
             "  TINY_CLAW_PROVIDER=claude ANTHROPIC_API_KEY=... "
             "uv run python tests/demo_edit_flow.py"

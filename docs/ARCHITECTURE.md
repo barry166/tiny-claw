@@ -104,6 +104,7 @@ flowchart TD
 - `ContextBuilder`：兼容入口，供 engine 调用。
 - `PromptComposer`：负责按优先级拼装 `PromptContext`。
 - `ContextCompactor`：在 provider 请求前压缩临时 messages，作为上下文过长兜底。
+- `context.plan`：管理 session 级 `PLAN.md` / `TODO.md` 的格式、解析和 plan prompt 片段。
 - `SkillRegistry`：扫描 `.claw/skills/<skill-name>/SKILL.md`，解析 frontmatter 和正文。
 - `SkillSelector`：支持 `$skill args`、`/skill args` 显式调用，也支持轻量关键词自动匹配。
 
@@ -134,11 +135,14 @@ head-tail truncation，assistant 的 tool calls、system message 和最后一条
 - `Channel`：把运行进度发给 CLI、Feishu 或其他外部通道。
 - `log_view`：把主循环、模型响应、工具调用渲染成可读日志。
 
-`MainLoop` 支持三种模式：
+`MainLoop` 支持四种模式：
 
 - `act`：默认 ReAct 执行模式，模型可以看到工具定义并调用工具。
+- `plan`：创建或恢复当前 session 的 `plan/PLAN.md` 与 `plan/TODO.md`，不暴露工具、不执行工具。
 - `think`：隐藏工具定义，只允许模型分析，不执行工具。
-- `plan-act`：第 1 轮是 `plan`，隐藏工具完成规划；后续轮次是 `act`，暴露工具并执行。
+- `plan-act`：创建或恢复 session plan 文件；没有 plan 文件时第 1 轮是 `plan`，后续轮次是 `act`，暴露工具并执行当前 TODO。
+
+session plan 文件位于 `TINY_CLAW_STATE_DIR/sessions/<session-key>/plan/`，避免污染项目根目录，并继承 CLI session 与飞书 chat 的隔离边界。`PLAN.md` 保存目标、架构、技术选型、约束和验证策略；`TODO.md` 使用稳定 checkbox ID，例如 `- [ ] TC-001 创建 main.go`。TODO 打勾由 runtime 在当前任务完成后更新，而不是要求模型自行编辑文件。
 
 主循环的关键步骤：
 
@@ -192,7 +196,7 @@ Provider 层负责厂商适配。engine 只认识内部协议：
 
 - `openai.py`：适配 OpenAI Chat Completions。
 - `claude.py`：适配 Claude Messages API。
-- `echo.py`：默认本地 provider，不需要 API key，用于开发和冒烟测试。
+- `echo.py`：显式本地 provider，不需要 API key，用于离线开发和冒烟测试。
 - `base.py`：定义 provider-neutral 协议。
 
 这个边界的价值是：新增 provider 时只实现 `LLMProvider.complete()` 和消息转换，不需要改 engine、context 或 tools。

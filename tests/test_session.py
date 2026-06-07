@@ -66,3 +66,19 @@ def test_session_memory_store_isolates_sessions(tmp_path) -> None:
 
     assert store.for_session(first).read_recent(limit=1) == ("last_prompt: hello first",)
     assert store.for_session(second).read_recent(limit=1) == ("last_prompt: hello second",)
+
+
+def test_session_plan_files_are_isolated_by_session_key(tmp_path) -> None:
+    manager = SessionManager(state_dir=tmp_path / "state", workdir=tmp_path)
+    first = manager.resolve_cli("first")
+    second = manager.resolve_cli("second")
+
+    first_plan = tmp_path / "state" / "sessions" / first.key / "plan" / "PLAN.md"
+    second_plan = tmp_path / "state" / "sessions" / second.key / "plan" / "PLAN.md"
+    first_plan.parent.mkdir(parents=True)
+    second_plan.parent.mkdir(parents=True)
+    first_plan.write_text("first", encoding="utf-8")
+    second_plan.write_text("second", encoding="utf-8")
+
+    assert first_plan.read_text(encoding="utf-8") == "first"
+    assert second_plan.read_text(encoding="utf-8") == "second"

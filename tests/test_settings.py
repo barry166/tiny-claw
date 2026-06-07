@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from tiny_claw._internal import settings as settings_module
 from tiny_claw._internal.errors import ConfigurationError
 from tiny_claw._internal.settings import Settings
 
@@ -9,6 +10,8 @@ from tiny_claw._internal.settings import Settings
 def test_settings_uses_current_directory_as_default_workdir() -> None:
     settings = Settings.from_env({})
 
+    assert settings.provider_name == "openai"
+    assert settings.model == "gpt-5.4"
     assert settings.workdir.is_absolute()
     assert settings.workdir.exists()
 
@@ -138,6 +141,7 @@ def test_settings_reads_dotenv_when_no_explicit_environment(monkeypatch, tmp_pat
         encoding="utf-8",
     )
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(settings_module, "_source_tree_dotenv_path", lambda: None)
     monkeypatch.delenv("TINY_CLAW_PROVIDER", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
@@ -149,11 +153,50 @@ def test_settings_reads_dotenv_when_no_explicit_environment(monkeypatch, tmp_pat
     assert settings.openai_base_url == "https://dotenv.example/v1"
 
 
-def test_environment_overrides_dotenv(monkeypatch, tmp_path) -> None:
-    (tmp_path / ".env").write_text("OPENAI_API_KEY=dotenv-key\n", encoding="utf-8")
+def test_project_dotenv_takes_priority_and_environment_fills_missing_values(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    project_dotenv = tmp_path / "project" / ".env"
+    project_dotenv.parent.mkdir()
+    project_dotenv.write_text("OPENAI_API_KEY=project-key\n", encoding="utf-8")
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    (cwd / ".env").write_text(
+        "\n".join(
+            [
+                "OPENAI_API_KEY=cwd-key",
+                "OPENAI_BASE_URL=https://cwd.example/v1",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        settings_module,
+        "_source_tree_dotenv_path",
+        lambda: project_dotenv,
+    )
+    monkeypatch.chdir(cwd)
+    monkeypatch.setenv("OPENAI_API_KEY", "env-key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://env.example/v1")
+    monkeypatch.setenv("TINY_CLAW_MAX_TOKENS", "2048")
+
+    settings = Settings.from_env()
+
+    assert settings.openai_api_key == "project-key"
+    assert settings.openai_base_url == "https://cwd.example/v1"
+    assert settings.max_tokens == 2048
+
+
+def test_current_directory_dotenv_is_used_when_project_dotenv_is_missing(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    (tmp_path / ".env").write_text("OPENAI_API_KEY=cwd-key\n", encoding="utf-8")
+    monkeypatch.setattr(settings_module, "_source_tree_dotenv_path", lambda: None)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("OPENAI_API_KEY", "env-key")
 
     settings = Settings.from_env()
 
-    assert settings.openai_api_key == "env-key"
+    assert settings.openai_api_key == "cwd-key"

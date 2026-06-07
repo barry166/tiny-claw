@@ -40,11 +40,12 @@
 
 ```bash
 uv run tiny-claw --help
-uv run tiny-claw health
-uv run tiny-claw run "hello"
-uv run tiny-claw run --session debug-login "继续这个调试会话"
-uv run tiny-claw run --mode think "先分析并制定计划"
-uv run tiny-claw run --mode plan-act "先规划再执行"
+OPENAI_API_KEY=sk-xxx uv run tiny-claw health
+OPENAI_API_KEY=sk-xxx uv run tiny-claw run "hello"
+OPENAI_API_KEY=sk-xxx uv run tiny-claw run --session debug-login "继续这个调试会话"
+OPENAI_API_KEY=sk-xxx uv run tiny-claw run --mode plan "先生成计划"
+OPENAI_API_KEY=sk-xxx uv run tiny-claw run --mode think "先分析并制定计划"
+OPENAI_API_KEY=sk-xxx uv run tiny-claw run --mode plan-act "先规划再执行"
 uv run tiny-claw serve --host 0.0.0.0 --port 8000
 uv run python -m tiny_claw --help
 ```
@@ -83,7 +84,8 @@ uv run tiny-claw serve --host 0.0.0.0 --port 8000
 - 真实 SDK / 厂商接入必须收敛在 `provider/` 适配层后面。
 - 工具能力默认禁用，除非调用方显式启用。
 - `run --mode think` 用于先分析 / 先计划场景，主循环不会向模型暴露工具定义，也会阻止意外工具调用。
-- `run --mode plan-act` 会先隐藏工具完成规划，再自动进入 ReAct 执行阶段；规划轮计入 `--max-steps`。
+- `run --mode plan` 只创建或恢复当前 session 的 `plan/PLAN.md` 和 `plan/TODO.md`，不执行工具。
+- `run --mode plan-act` 会先创建或恢复 session plan 文件，再进入 ReAct 执行阶段；规划轮计入 `--max-steps`。
 - `run --mode act` 是默认 ReAct 执行模式，会按工具策略向 provider 传递工具定义。
 - `run --session <name>` 用于隔离 CLI 会话记忆；飞书入口按 `chat_id` 自动隔离。
 - `engine` 相关测试应优先使用依赖注入，方便注入 fake provider、fake memory、fake
@@ -106,8 +108,8 @@ uv run pytest
 ```bash
 uv run tiny-claw --help
 uv run tiny-claw serve --help
-TINY_CLAW_STATE_DIR=.tmp-state uv run tiny-claw health
-TINY_CLAW_STATE_DIR=.tmp-state uv run tiny-claw run "hello tiny claw"
+TINY_CLAW_PROVIDER=echo TINY_CLAW_STATE_DIR=.tmp-state uv run tiny-claw health
+TINY_CLAW_PROVIDER=echo TINY_CLAW_STATE_DIR=.tmp-state uv run tiny-claw run "hello tiny claw"
 uv run python -m tiny_claw --help
 ```
 
@@ -117,7 +119,7 @@ uv run python -m tiny_claw --help
 
 - `TINY_CLAW_LOG_LEVEL`：`DEBUG`、`INFO`、`WARNING`、`ERROR` 或 `CRITICAL`，默认
   `INFO`。
-- `TINY_CLAW_PROVIDER`：provider 名称，默认 `echo`。
+- `TINY_CLAW_PROVIDER`：provider 名称，默认 `openai`。
 - `TINY_CLAW_PROVIDER` 支持 `echo`、`openai`、`claude`、`anthropic`。
 - `TINY_CLAW_MODEL`：模型名称；OpenAI 默认 `gpt-5.4`，Claude 默认
   `claude-sonnet-4-20250514`，其他 provider 默认等于 provider 名称。
@@ -134,10 +136,12 @@ uv run python -m tiny_claw --help
 - `FEISHU_ENCRYPT_KEY`：飞书事件订阅 encrypt key，可选。
 - `FEISHU_EVENT_PATH`：飞书事件回调路径，默认 `/api/events/feishu`。
 
-CLI 会读取当前执行目录下的 `.env` 文件，真实环境变量优先级高于 `.env`。
-`.env` 包含密钥，必须保持在 git ignore 中。
+CLI 会按优先级读取 tiny-claw 源码根目录 `.env`、当前执行目录 `.env`、系统环境变量；
+后者只补充前者缺失的键，不覆盖已读取的值。`.env` 包含密钥，必须保持在 git ignore 中。
 
 ## 当前 Provider 策略
 
-默认 `echo` provider 保持无 API key 可运行。`openai` 和 `claude` provider 使用官方 SDK，
+默认 `openai` provider 使用官方 SDK，需要配置 `OPENAI_API_KEY` 或 `OPENAI_KEY`。
+`echo` provider 仍可通过 `TINY_CLAW_PROVIDER=echo` 显式启用，用于离线开发和冒烟测试。
+`claude` provider 也使用官方 SDK，
 不同厂商的请求 / 响应结构转换应收敛在 `provider/` 适配层，`engine` 不应依赖具体厂商。

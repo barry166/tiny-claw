@@ -66,6 +66,11 @@ class FakeTool:
         return ToolOutput(content=f"observed:{input.arguments['message']}")
 
 
+class ErrorTool(FakeTool):
+    def run(self, input: ToolInput) -> ToolOutput:
+        return ToolOutput(content="tool failed", is_error=True)
+
+
 class LargeOutputTool:
     @property
     def name(self) -> str:
@@ -527,65 +532,147 @@ def test_main_loop_blocks_tool_calls_in_think_mode(tmp_path) -> None:
     assert len(provider.requests) == 1
 
 
-def test_main_loop_plan_act_plans_then_exposes_tools(tmp_path) -> None:
+def test_main_loop_plan_mode_creates_session_plan_files(tmp_path) -> None:
     provider = FakeProvider(
         responses=[
-            Message.assistant("plan: use fake_tool"),
-            Message.assistant("done"),
+            Message.assistant(
+                "<PLAN_MD># PLAN.md\n\n## 目标理解\n\nCreate files.</PLAN_MD>\n"
+                "<TODO_MD># TODO.md\n\n- [ ] TC-001 Create files</TODO_MD>"
+            )
         ]
     )
+    memory = SessionMemoryStore(tmp_path / "state")
+    engine = _build_engine(provider=provider, memory=memory, workdir=tmp_path)
+    session = _session(tmp_path)
+
+    result = engine.run(
+        prompt="plan only",
+        max_steps=1,
+        mode=RunMode.PLAN,
+        session=session,
+    )
+
+    plan_dir = tmp_path / "state" / "sessions" / session.key / "plan"
+    assert result.stop_reason == STOP_REASON_FINAL
+    assert result.mode is RunMode.PLAN
+    assert result.tool_policy is ToolPolicy.NONE
+    assert "Create files" in result.text
+    assert (plan_dir / "PLAN.md").read_text(encoding="utf-8").startswith("# PLAN.md")
+    assert "TC-001 Create files" in (plan_dir / "TODO.md").read_text(encoding="utf-8")
+    assert provider.requests[0].tools == ()
+    assert provider.requests[0].tool_choice is ToolChoice.NONE
+
+
+def test_main_loop_plan_mode_resumes_existing_plan_without_overwrite(tmp_path) -> None:
+    provider = FakeProvider()
+    memory = SessionMemoryStore(tmp_path / "state")
+    engine = _build_engine(provider=provider, memory=memory, workdir=tmp_path)
+    session = _session(tmp_path)
+    plan_dir = tmp_path / "state" / "sessions" / session.key / "plan"
+    plan_dir.mkdir(parents=True)
+    (plan_dir / "PLAN.md").write_text("# PLAN.md\n\nmanual plan\n", encoding="utf-8")
+    (plan_dir / "TODO.md").write_text(
+        "# TODO.md\n\n- [x] TC-001 Done\n- [ ] TC-002 Continue\n",
+        encoding="utf-8",
+    )
+
+    result = engine.run(
+        prompt="resume",
+        max_steps=1,
+        mode=RunMode.PLAN,
+        session=session,
+    )
+
+    assert len(provider.requests) == 0
+    assert result.plan == "# PLAN.md\n\nmanual plan\n"
+    assert "Next TODO: TC-002 Continue" in result.text
+    assert (plan_dir / "PLAN.md").read_text(encoding="utf-8") == "# PLAN.md\n\nmanual plan\n"
+    memory_entries = memory.for_session(session).read_recent(limit=2)
+    assert memory_entries[0] == "last_prompt: resume"
+    assert "session_plan=" in memory_entries[1]
+    assert "next_todo=TC-002 Continue" in memory_entries[1]
+    assert "manual plan" not in memory_entries[1]
+
+
+def test_main_loop_plan_act_creates_plan_then_exposes_tools(tmp_path) -> None:
+    call = ToolCall(id="call-1", name="fake_tool", arguments={"message": "ok"})
+    provider = FakeProvider(
+        responses=[
+            Message.assistant(
+                "<PLAN_MD># PLAN.md\n\n## 目标理解\n\nUse fake_tool.</PLAN_MD>\n"
+                "<TODO_MD># TODO.md\n\n- [ ] TC-001 Use fake_tool</TODO_MD>"
+            ),
+            Message.assistant(tool_calls=(call,)),
+            Message.assistant("PLAN_STEP_STATUS: completed\ndone"),
+        ]
+    )
+    memory = SessionMemoryStore(tmp_path / "state")
     tools = ToolRegistry()
     tools.register(FakeTool())
-    engine = _build_engine(provider=provider, tools=tools, workdir=tmp_path)
+    engine = _build_engine(provider=provider, memory=memory, tools=tools, workdir=tmp_path)
+    session = _session(tmp_path)
 
     result = engine.run(
         prompt="plan then act",
-        max_steps=2,
+        max_steps=3,
         mode=RunMode.PLAN_ACT,
-        session=_session(tmp_path),
+        session=session,
     )
 
-    assert result.text == "done"
-    assert result.steps == 2
+    todo_path = tmp_path / "state" / "sessions" / session.key / "plan" / "TODO.md"
+    assert result.text == "PLAN_STEP_STATUS: completed\ndone"
+    assert result.steps == 3
     assert result.mode is RunMode.PLAN_ACT
     assert result.tool_policy is ToolPolicy.AUTO
-    assert result.plan == "plan: use fake_tool"
+    assert "Use fake_tool" in (result.plan or "")
+    assert "- [x] TC-001 Use fake_tool" in todo_path.read_text(encoding="utf-8")
     assert provider.requests[0].tools == ()
     assert provider.requests[0].tool_choice is ToolChoice.NONE
     assert provider.requests[1].tools == (FakeTool().definition(),)
     assert provider.requests[1].tool_choice is ToolChoice.AUTO
     assert any(
-        message.role is Role.ASSISTANT and message.content == "plan: use fake_tool"
+        message.role is Role.USER and "Current TODO: TC-001 Use fake_tool" in message.content
         for message in provider.requests[1].messages
     )
     assert any(
-        message.role is Role.USER and "进入执行阶段" in message.content
-        for message in provider.requests[1].messages
+        message.role is Role.TOOL and message.content == "observed:ok"
+        for message in provider.requests[2].messages
     )
 
 
 def test_main_loop_plan_act_counts_planning_toward_max_steps(tmp_path) -> None:
-    provider = FakeProvider(responses=[Message.assistant("plan only")])
+    provider = FakeProvider(
+        responses=[
+            Message.assistant(
+                "<PLAN_MD># PLAN.md\n\nplan only</PLAN_MD>\n"
+                "<TODO_MD># TODO.md\n\n- [ ] TC-001 Continue</TODO_MD>"
+            )
+        ]
+    )
+    memory = SessionMemoryStore(tmp_path / "state")
     tools = ToolRegistry()
     tools.register(FakeTool())
-    engine = _build_engine(provider=provider, tools=tools, workdir=tmp_path)
+    engine = _build_engine(provider=provider, memory=memory, tools=tools, workdir=tmp_path)
+    session = _session(tmp_path)
 
     result = engine.run(
         prompt="plan then act",
         max_steps=1,
         mode=RunMode.PLAN_ACT,
-        session=_session(tmp_path),
+        session=session,
     )
 
-    assert result.text == "plan only"
+    assert "plan only" in result.text
     assert result.steps == 1
     assert result.stop_reason == STOP_REASON_MAX_STEPS_EXHAUSTED
     assert result.mode is RunMode.PLAN_ACT
     assert result.tool_policy is ToolPolicy.NONE
-    assert result.plan == "plan only"
+    assert result.plan == "# PLAN.md\n\nplan only\n"
     assert provider.requests[0].tools == ()
     assert provider.requests[0].tool_choice is ToolChoice.NONE
     assert len(provider.requests) == 1
+    todo_path = tmp_path / "state" / "sessions" / session.key / "plan" / "TODO.md"
+    assert "- [ ] TC-001 Continue" in todo_path.read_text(encoding="utf-8")
 
 
 def test_main_loop_plan_act_blocks_tool_calls_during_plan(tmp_path) -> None:
@@ -593,22 +680,87 @@ def test_main_loop_plan_act_blocks_tool_calls_during_plan(tmp_path) -> None:
     provider = FakeProvider(responses=[Message.assistant(content="plan", tool_calls=(call,))])
     tools = ToolRegistry()
     tools.register(FakeTool())
-    engine = _build_engine(provider=provider, tools=tools, workdir=tmp_path)
+    memory = SessionMemoryStore(tmp_path / "state")
+    engine = _build_engine(provider=provider, memory=memory, tools=tools, workdir=tmp_path)
+    session = _session(tmp_path)
 
     result = engine.run(
         prompt="plan then act",
         max_steps=2,
         mode=RunMode.PLAN_ACT,
-        session=_session(tmp_path),
+        session=session,
     )
 
+    plan_dir = tmp_path / "state" / "sessions" / session.key / "plan"
     assert result.text == "plan"
     assert result.steps == 1
     assert result.stop_reason == STOP_REASON_TOOL_POLICY_BLOCKED
     assert result.mode is RunMode.PLAN_ACT
     assert result.tool_policy is ToolPolicy.NONE
-    assert result.plan == "plan"
+    assert result.plan is None
     assert len(provider.requests) == 1
+    assert not plan_dir.exists()
+
+
+def test_main_loop_plan_act_resumes_existing_todo_and_marks_done(tmp_path) -> None:
+    provider = FakeProvider(responses=[Message.assistant("PLAN_STEP_STATUS: completed\nok")])
+    memory = SessionMemoryStore(tmp_path / "state")
+    engine = _build_engine(provider=provider, memory=memory, workdir=tmp_path)
+    session = _session(tmp_path)
+    plan_dir = tmp_path / "state" / "sessions" / session.key / "plan"
+    plan_dir.mkdir(parents=True)
+    (plan_dir / "PLAN.md").write_text("# PLAN.md\n\nexisting\n", encoding="utf-8")
+    (plan_dir / "TODO.md").write_text(
+        "# TODO.md\n\n- [ ] TC-001 Continue\n",
+        encoding="utf-8",
+    )
+
+    result = engine.run(
+        prompt="continue",
+        max_steps=1,
+        mode=RunMode.PLAN_ACT,
+        session=session,
+    )
+
+    assert result.stop_reason == STOP_REASON_FINAL
+    assert result.steps == 1
+    assert provider.requests[0].tool_choice is ToolChoice.AUTO
+    assert "- [x] TC-001 Continue" in (plan_dir / "TODO.md").read_text(encoding="utf-8")
+
+
+def test_main_loop_plan_act_keeps_todo_open_and_records_blocker_on_tool_error(tmp_path) -> None:
+    call = ToolCall(id="call-1", name="fake_tool", arguments={"message": "ok"})
+    provider = FakeProvider(
+        responses=[
+            Message.assistant(tool_calls=(call,)),
+            Message.assistant("PLAN_STEP_STATUS: completed\nfinished"),
+        ]
+    )
+    memory = SessionMemoryStore(tmp_path / "state")
+    tools = ToolRegistry()
+    tools.register(ErrorTool())
+    engine = _build_engine(provider=provider, memory=memory, tools=tools, workdir=tmp_path)
+    session = _session(tmp_path)
+    plan_dir = tmp_path / "state" / "sessions" / session.key / "plan"
+    plan_dir.mkdir(parents=True)
+    (plan_dir / "PLAN.md").write_text("# PLAN.md\n\nexisting\n", encoding="utf-8")
+    (plan_dir / "TODO.md").write_text(
+        "# TODO.md\n\n- [ ] TC-001 Continue\n",
+        encoding="utf-8",
+    )
+
+    result = engine.run(
+        prompt="continue",
+        max_steps=2,
+        mode=RunMode.PLAN_ACT,
+        session=session,
+    )
+
+    todo_text = (plan_dir / "TODO.md").read_text(encoding="utf-8")
+    assert result.stop_reason == STOP_REASON_FINAL
+    assert "- [ ] TC-001 Continue" in todo_text
+    assert "## Blockers" in todo_text
+    assert "TC-001:" in todo_text
 
 
 def _build_engine(

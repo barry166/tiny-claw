@@ -211,16 +211,22 @@ def log_run_return(
     stop_reason: str,
 ) -> None:
     logger.info(
-        "%s provider=%s reason=%s text_chars=%s\n%s",
+        "%s provider=%s reason=%s text_chars=%s",
         color("[Run 完成] 主循环返回", COLOR_GREEN),
         provider,
         stop_reason,
         len(text),
-        indent(
-            "final:\n" + indent(preview_block(text, max_chars=RETURN_PREVIEW_CHARS), prefix="  "),
-            prefix="  ",
-        ),
     )
+    if text:
+        logger.debug(
+            "%s\n%s",
+            color("[Run 完成] final 预览:", COLOR_GREEN),
+            indent(
+                "final:\n"
+                + indent(preview_block(text, max_chars=RETURN_PREVIEW_CHARS), prefix="  "),
+                prefix="  ",
+            ),
+        )
 
 
 def format_json(value: Mapping[str, Any]) -> str:

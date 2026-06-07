@@ -30,8 +30,8 @@ DEFAULT_CONTEXT_RECENT_TOOL_RESULT_TAIL_CHARS = 2_000
 @dataclass(frozen=True)
 class Settings:
     log_level: str = "INFO"
-    provider_name: str = "echo"
-    model: str = "echo"
+    provider_name: str = "openai"
+    model: str = DEFAULT_OPENAI_MODEL
     max_tokens: int = DEFAULT_MAX_TOKENS
     state_dir: Path = DEFAULT_STATE_DIR
     workdir: Path = field(default_factory=lambda: Path.cwd().resolve())
@@ -61,7 +61,7 @@ class Settings:
     ) -> Self:
         env = _load_environment(environ)
         resolved_log_level = log_level or env.get("TINY_CLAW_LOG_LEVEL", "INFO")
-        provider_name = env.get("TINY_CLAW_PROVIDER", "echo").lower()
+        provider_name = env.get("TINY_CLAW_PROVIDER", "openai").lower()
         model = env.get("TINY_CLAW_MODEL") or _default_model(provider_name)
         max_tokens = _positive_int_env(env.get("TINY_CLAW_MAX_TOKENS"), DEFAULT_MAX_TOKENS)
         state_dir = Path(env.get("TINY_CLAW_STATE_DIR", str(DEFAULT_STATE_DIR))).expanduser()
@@ -172,9 +172,39 @@ def _load_environment(environ: Mapping[str, str] | None) -> Mapping[str, str]:
     if environ is not None:
         return environ
 
-    merged = dict(_read_dotenv(Path.cwd() / ".env"))
-    merged.update(os.environ)
+    merged: dict[str, str] = {}
+    for dotenv_path in _dotenv_paths():
+        for key, value in _read_dotenv(dotenv_path).items():
+            merged.setdefault(key, value)
+    for key, value in os.environ.items():
+        merged.setdefault(key, value)
     return merged
+
+
+def _dotenv_paths() -> tuple[Path, ...]:
+    paths: list[Path] = []
+    source_tree_dotenv = _source_tree_dotenv_path()
+    if source_tree_dotenv is not None:
+        paths.append(source_tree_dotenv)
+
+    cwd_dotenv = Path.cwd() / ".env"
+    if cwd_dotenv not in paths:
+        paths.append(cwd_dotenv)
+    return tuple(paths)
+
+
+def _source_tree_dotenv_path() -> Path | None:
+    for parent in Path(__file__).resolve().parents:
+        pyproject = parent / "pyproject.toml"
+        if not pyproject.exists():
+            continue
+        try:
+            content = pyproject.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if 'name = "tiny-claw"' in content:
+            return parent / ".env"
+    return None
 
 
 def _read_dotenv(path: Path) -> Mapping[str, str]:

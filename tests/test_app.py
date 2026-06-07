@@ -129,7 +129,7 @@ def test_application_rejects_session_from_different_workdir(tmp_path) -> None:
         app.run(prompt="hello", max_steps=1, session=session)
 
 
-def test_integration_application_uses_openai_even_when_default_provider_is_echo(tmp_path) -> None:
+def test_integration_application_uses_openai_default_provider(tmp_path) -> None:
     settings = Settings.from_env(
         {
             "OPENAI_KEY": "key",
@@ -143,7 +143,7 @@ def test_integration_application_uses_openai_even_when_default_provider_is_echo(
 
 
 def test_application_registers_read_tool(tmp_path) -> None:
-    settings = Settings.from_env({"TINY_CLAW_STATE_DIR": str(tmp_path)})
+    settings = Settings.from_env({"OPENAI_KEY": "key", "TINY_CLAW_STATE_DIR": str(tmp_path)})
 
     app = build_application(settings)
 
@@ -153,6 +153,7 @@ def test_application_registers_read_tool(tmp_path) -> None:
 def test_application_registers_explicitly_enabled_tools(tmp_path) -> None:
     settings = Settings.from_env(
         {
+            "OPENAI_KEY": "key",
             "TINY_CLAW_STATE_DIR": str(tmp_path),
             "TINY_CLAW_ENABLED_TOOLS": "read,write,bash,edit",
         }
