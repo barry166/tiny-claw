@@ -55,3 +55,21 @@ def test_log_tool_result_renders_error_block(caplog) -> None:
 
     assert "工具失败" in caplog.text
     assert "exit_code=1" in caplog.text
+
+
+def test_log_tool_error_fallback_renders_user_visible_hint(caplog) -> None:
+    with caplog.at_level(logging.WARNING):
+        log_view.log_tool_error_fallback(
+            logging.getLogger("test-log-view"),
+            name="read",
+            error_type="read_path_not_found",
+            attempt_count=1,
+            retryable=True,
+            suggested_tool="bash",
+        )
+
+    assert "工具错误兜底已触发" in caplog.text
+    assert "已把失败翻译成下一步建议" in caplog.text
+    assert "tool=read" in caplog.text
+    assert "error_type=read_path_not_found" in caplog.text
+    assert "suggested_tool=bash" in caplog.text

@@ -421,6 +421,45 @@ def test_main_loop_returns_bash_error_observation_for_self_correction(tmp_path) 
     )
 
 
+def test_main_loop_tool_error_guidance_uses_visible_tools_after_skill_filter(tmp_path) -> None:
+    skill_dir = tmp_path / ".claw" / "skills" / "read-only"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: read-only\n"
+        "description: Read-only workflow.\n"
+        "allowed-tools: read\n"
+        "---\n"
+        "Use read only.\n",
+        encoding="utf-8",
+    )
+    call = ToolCall(id="call-read", name="read", arguments={"path": "missing.txt"})
+    provider = FakeProvider(
+        responses=[
+            Message.assistant(tool_calls=(call,)),
+            Message.assistant("blocked"),
+        ]
+    )
+    tools = ToolRegistry()
+    tools.register(ReadTool(root=tmp_path))
+    tools.register(BashTool(workdir=tmp_path))
+    engine = _build_engine(provider=provider, tools=tools, workdir=tmp_path)
+
+    result = engine.run(
+        prompt="$read-only inspect missing.txt",
+        max_steps=2,
+        session=_session(tmp_path),
+    )
+
+    assert result.text == "blocked"
+    tool_message = _first_tool_message(provider.requests[1].messages)
+    assert tool_message is not None
+    assert tool_message.metadata["error_type"] == "read_path_not_found"
+    assert "当前没有可见的 bash 工具" in tool_message.content
+    assert "ls " not in tool_message.content
+    assert "suggested_tool" not in tool_message.metadata
+
+
 def test_main_loop_compacts_provider_request_without_mutating_history(tmp_path, caplog) -> None:
     call = ToolCall(id="call-1", name="fake_tool", arguments={"message": "ok"})
     provider = FakeProvider(

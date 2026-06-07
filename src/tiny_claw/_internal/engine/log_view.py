@@ -169,6 +169,30 @@ def log_tool_result(logger: logging.Logger, *, name: str, output: ToolOutput) ->
     )
 
 
+def log_tool_error_fallback(
+    logger: logging.Logger,
+    *,
+    name: str,
+    error_type: str,
+    attempt_count: int,
+    retryable: bool,
+    suggested_tool: str | None = None,
+) -> None:
+    suggested = suggested_tool or "none"
+    logger.warning(
+        (
+            "  -> %s 工具错误兜底已触发：已把失败翻译成下一步建议 "
+            "tool=%s error_type=%s attempt=%s retryable=%s suggested_tool=%s"
+        ),
+        color("[ToolFallback]", COLOR_YELLOW),
+        color(name, COLOR_RED),
+        error_type,
+        attempt_count,
+        retryable,
+        suggested,
+    )
+
+
 def log_tool_exception(logger: logging.Logger, *, name: str, error: str) -> None:
     logger.warning(
         "  -> %s: %s\n%s",

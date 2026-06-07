@@ -46,6 +46,28 @@ def test_feishu_channel_implements_engine_channel_and_sends_progress() -> None:
     ]
 
 
+def test_feishu_channel_prints_tool_error_fallback_hint() -> None:
+    sender = RecordingSender()
+    channel = FeishuChannel(sender=sender)
+
+    channel.on_tool_result(
+        call=ToolCall(id="call-1", name="read", arguments={}),
+        result=Message(
+            role=Role.TOOL,
+            content="translated",
+            metadata={
+                "is_error": True,
+                "error_type": "read_path_not_found",
+                "suggested_tool": "bash",
+            },
+        ),
+    )
+
+    assert sender.messages == [
+        ("工具 read 失败，已触发错误兜底：read_path_not_found。建议下一步：bash。", False),
+    ]
+
+
 def test_feishu_sdk_sender_replies_with_original_message_id() -> None:
     sdk_channel = RecordingSdkChannel()
     sender = FeishuSdkMessageSender(

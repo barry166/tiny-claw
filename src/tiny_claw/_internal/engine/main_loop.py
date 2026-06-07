@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import StrEnum
 from functools import partial
 from pathlib import Path
@@ -65,10 +65,6 @@ class MainLoop:
     context_compactor: ContextCompactor
     memory: SessionMemoryStore
     tools: ToolRegistry
-    _tool_executor: ToolExecutor = field(init=False, repr=False)
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "_tool_executor", ToolExecutor(tools=self.tools))
 
     @property
     def provider_name(self) -> str:
@@ -121,6 +117,10 @@ class MainLoop:
                 for definition in registered_tool_definitions
                 if definition.name in allowed_tools
             )
+        tool_executor = ToolExecutor(
+            tools=self.tools,
+            visible_tool_names=tuple(definition.name for definition in registered_tool_definitions),
+        )
         last_text = ""
         last_provider = self.provider.name
         plan: str | None = None
@@ -434,7 +434,7 @@ class MainLoop:
                     plan=plan,
                 )
 
-            observations = self._tool_executor.run_tool_calls(
+            observations = tool_executor.run_tool_calls(
                 response.message.tool_calls,
                 channel=resolved_channel,
             )

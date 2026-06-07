@@ -48,8 +48,18 @@ class FeishuChannel(Channel):
         self._send(f"正在调用工具：{call.name}。")
 
     def on_tool_result(self, *, call: ToolCall, result: Message) -> None:
-        status = "失败" if result.metadata.get("is_error") is True else "完成"
-        self._send(f"工具 {call.name} {status}。")
+        if result.metadata.get("is_error") is True:
+            error_type = result.metadata.get("error_type")
+            if not isinstance(error_type, str):
+                self._send(f"工具 {call.name} 失败。")
+                return
+            suggested_tool = result.metadata.get("suggested_tool")
+            suggestion = (
+                f"建议下一步：{suggested_tool}。" if isinstance(suggested_tool, str) else ""
+            )
+            self._send(f"工具 {call.name} 失败，已触发错误兜底：{error_type}。{suggestion}")
+            return
+        self._send(f"工具 {call.name} 完成。")
 
     def on_done(self, *, text: str, stop_reason: str, steps: int, max_steps: int) -> None:
         self._send(text, reply=True)
