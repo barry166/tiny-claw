@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from tiny_claw._internal.context.plan import (
     PlanMarkdownParser,
+    PlanPromptBuilder,
     PlanResponseParser,
+    PlanSnapshot,
+    TodoItem,
     plan_step_status,
 )
 
@@ -30,6 +33,27 @@ def test_plan_response_parser_extracts_documents_and_adds_missing_todo_ids() -> 
 
     assert plan_text.startswith("# PLAN.md")
     assert "- [ ] TC-001 Create files" in todo_text
+
+
+def test_plan_act_execute_prompt_allows_execution_tools() -> None:
+    snapshot = PlanSnapshot(
+        plan_text="# PLAN.md\n\n## 约束条件\n\nPlan Mode 不能直接执行命令",
+        todo_text="# TODO.md\n\n- [ ] TC-006 初始化项目",
+        next_todo=TodoItem(
+            id="TC-006",
+            text="初始化项目",
+            done=False,
+            line_index=2,
+        ),
+    )
+
+    prompt = PlanPromptBuilder.execute_current_task_prompt(snapshot)
+
+    assert "Plan-Act execution phase is ON" in prompt
+    assert "You may call the available tools" in prompt
+    assert "create files, edit files, and run commands" in prompt
+    assert "not to this execution phase" in prompt
+    assert not prompt.startswith("Plan Mode is ON")
 
 
 def test_plan_step_status_parses_completion_marker() -> None:

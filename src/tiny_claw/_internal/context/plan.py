@@ -159,8 +159,12 @@ class PlanPromptBuilder:
     @staticmethod
     def execute_current_task_prompt(snapshot: PlanSnapshot) -> str:
         return (
-            "Plan Mode is ON. Continue from the persisted session plan files below. "
-            "Execute exactly the current TODO item, and do not work ahead.\n\n"
+            "Plan-Act execution phase is ON. Continue from the persisted session "
+            "plan files below. You may call the available tools, create files, edit "
+            "files, and run commands when the current TODO requires execution. "
+            "Execute exactly the current TODO item, and do not work ahead. "
+            "Any PLAN.md statements that say Plan Mode cannot execute commands apply "
+            "only to the earlier planning-only phase, not to this execution phase.\n\n"
             f"Current TODO: {_format_next_todo(snapshot.next_todo)}\n\n"
             "When the current TODO is complete, include the exact line "
             "'PLAN_STEP_STATUS: completed' in your final response. If blocked, include "
