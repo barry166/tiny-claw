@@ -359,44 +359,20 @@ class MainLoop:
                             reason=last_text,
                         )
                         plan = snapshot.plan_text
-                self._record_run(
+                return self._record_and_return_result(
                     memory=session_memory,
                     prompt=prompt,
                     response=last_text,
-                )
-                log_view.log_run_complete(
-                    logger,
                     provider=last_provider,
                     stop_reason=STOP_REASON_FINAL,
                     steps=step,
                     max_steps=max_steps,
-                    mode=mode.value,
+                    session=session,
+                    run_mode=mode,
                     phase=phase,
-                    tool_policy=tool_policy.value,
-                )
-                log_view.log_run_return(
-                    logger,
-                    text=last_text,
-                    provider=last_provider,
-                    stop_reason=STOP_REASON_FINAL,
-                )
-                self._notify_done(
-                    channel=resolved_channel,
-                    text=last_text,
-                    stop_reason=STOP_REASON_FINAL,
-                    steps=step,
-                    max_steps=max_steps,
-                )
-                return RunResult(
-                    text=last_text,
-                    provider=last_provider,
-                    steps=step,
-                    max_steps=max_steps,
-                    workdir=session.workdir,
-                    stop_reason=STOP_REASON_FINAL,
-                    mode=mode,
                     tool_policy=tool_policy,
                     plan=plan,
+                    channel=resolved_channel,
                 )
 
             if tool_policy is ToolPolicy.NONE:
@@ -404,82 +380,43 @@ class MainLoop:
                     "模型在禁用工具策略下仍返回工具调用 tool_calls=%s，已阻止执行",
                     tool_call_count,
                 )
-                self._record_run(
+                return self._record_and_return_result(
                     memory=session_memory,
                     prompt=prompt,
                     response=last_text,
-                )
-                log_view.log_run_return(
-                    logger,
-                    text=last_text,
                     provider=last_provider,
-                    stop_reason=STOP_REASON_TOOL_POLICY_BLOCKED,
-                )
-                self._notify_done(
-                    channel=resolved_channel,
-                    text=last_text,
                     stop_reason=STOP_REASON_TOOL_POLICY_BLOCKED,
                     steps=step,
                     max_steps=max_steps,
-                )
-                return RunResult(
-                    text=last_text,
-                    provider=last_provider,
-                    steps=step,
-                    max_steps=max_steps,
-                    workdir=session.workdir,
-                    stop_reason=STOP_REASON_TOOL_POLICY_BLOCKED,
-                    mode=mode,
+                    session=session,
+                    run_mode=mode,
+                    phase=phase,
                     tool_policy=tool_policy,
                     plan=plan,
+                    channel=resolved_channel,
                 )
 
             observations = tool_executor.run_tool_calls(
                 response.message.tool_calls,
                 channel=resolved_channel,
             )
-            if any(message.metadata.get("is_error") is True for message in observations):
+            if _append_tool_observations(messages, observations):
                 current_step_had_tool_error = True
-            messages.extend(observations)
 
-        self._record_run(
+        return self._record_and_return_result(
             memory=session_memory,
             prompt=prompt,
             response=last_text,
-        )
-        log_view.log_run_complete(
-            logger,
             provider=last_provider,
             stop_reason=STOP_REASON_MAX_STEPS_EXHAUSTED,
             steps=max_steps,
             max_steps=max_steps,
-            mode=mode.value,
+            session=session,
+            run_mode=mode,
             phase=None,
-            tool_policy=tool_policy.value,
-        )
-        log_view.log_run_return(
-            logger,
-            text=last_text,
-            provider=last_provider,
-            stop_reason=STOP_REASON_MAX_STEPS_EXHAUSTED,
-        )
-        self._notify_done(
-            channel=resolved_channel,
-            text=last_text,
-            stop_reason=STOP_REASON_MAX_STEPS_EXHAUSTED,
-            steps=max_steps,
-            max_steps=max_steps,
-        )
-        return RunResult(
-            text=last_text,
-            provider=last_provider,
-            steps=max_steps,
-            max_steps=max_steps,
-            workdir=session.workdir,
-            stop_reason=STOP_REASON_MAX_STEPS_EXHAUSTED,
-            mode=mode,
             tool_policy=tool_policy,
             plan=plan,
+            channel=resolved_channel,
         )
 
     def _run_plan_mode(
@@ -579,6 +516,7 @@ class MainLoop:
         tool_policy: ToolPolicy,
         plan: str | None,
         channel: Channel,
+        phase: str | None = None,
     ) -> RunResult:
         log_view.log_run_complete(
             logger,
@@ -587,7 +525,7 @@ class MainLoop:
             steps=steps,
             max_steps=max_steps,
             mode=mode.value,
-            phase=None,
+            phase=phase,
             tool_policy=tool_policy.value,
         )
         log_view.log_run_return(
@@ -613,6 +551,38 @@ class MainLoop:
             mode=mode,
             tool_policy=tool_policy,
             plan=plan,
+        )
+
+    def _record_and_return_result(
+        self,
+        *,
+        memory: FileMemoryStore,
+        prompt: str,
+        response: str,
+        provider: str,
+        stop_reason: str,
+        steps: int,
+        max_steps: int,
+        session: SessionRef,
+        run_mode: RunMode,
+        phase: str | None,
+        tool_policy: ToolPolicy,
+        plan: str | None,
+        channel: Channel,
+    ) -> RunResult:
+        self._record_run(memory=memory, prompt=prompt, response=response)
+        return self._return_result(
+            text=response,
+            provider=provider,
+            stop_reason=stop_reason,
+            steps=steps,
+            max_steps=max_steps,
+            session=session,
+            mode=run_mode,
+            tool_policy=tool_policy,
+            plan=plan,
+            channel=channel,
+            phase=phase,
         )
 
     def _record_run(self, *, memory: FileMemoryStore, prompt: str, response: str) -> None:
@@ -681,3 +651,33 @@ def _tool_policy_for_phase(phase: str) -> ToolPolicy:
     if phase in {"think", "plan"}:
         return ToolPolicy.NONE
     return ToolPolicy.AUTO
+
+
+def _append_tool_observations(messages: list[Message], observations: tuple[Message, ...]) -> bool:
+    messages.extend(observations)
+    warning = _doom_loop_warning_for(observations)
+    if warning is not None:
+        messages.append(Message.user(warning))
+    return any(message.metadata.get("is_error") is True for message in observations)
+
+
+def _doom_loop_warning_for(observations: tuple[Message, ...]) -> str | None:
+    for observation in observations:
+        if observation.metadata.get("doom_loop_detected") is not True:
+            continue
+        attempt = int(observation.metadata.get("attempt", 0))
+        tool_name = str(observation.metadata.get("doom_loop_tool") or observation.name or "unknown")
+        return _render_doom_loop_warning(attempt=attempt, tool_name=tool_name)
+    return None
+
+
+def _render_doom_loop_warning(*, attempt: int, tool_name: str) -> str:
+    return (
+        f"你似乎陷入了死循环。你刚刚连续 {attempt} 次使用相同的参数调用了 "
+        f"'{tool_name}' 工具，并且都失败了。请立即停止这种无效的重试！"
+        "你的注意力被当前的报错过度吸引了。你需要："
+        "1. 停止猜测参数。跳出当前的局部思维。"
+        "2. 彻底改变你的策略。"
+        "3. 如果你确实无法通过系统工具解决当前问题，请直接结束任务并向用户说明"
+        "你需要什么人工帮助，而不是继续盲目消耗 API 资源尝试。"
+    )

@@ -383,6 +383,8 @@ def test_tool_executor_blocks_repeated_identical_failures() -> None:
     assert third.metadata["error_type"] == "repeat_call_blocked"
     assert third.metadata["retryable"] is False
     assert third.metadata["attempt"] == 3
+    assert third.metadata["doom_loop_detected"] is True
+    assert third.metadata["doom_loop_tool"] == "read"
     assert "已阻止继续重复执行" in third.content
     assert tool.calls == 2
 

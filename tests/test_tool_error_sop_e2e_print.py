@@ -147,6 +147,55 @@ def test_print_e2e_repeated_read_failure_blocks_third_attempt(tmp_path) -> None:
     _print_tool_observations(provider)
 
 
+def test_print_e2e_doom_loop_warning_corrects_repeated_read_prompt(tmp_path) -> None:
+    workdir = tmp_path / "workdir"
+    state_dir = tmp_path / "state"
+    workdir.mkdir()
+    repeated_call = ToolCall(
+        id="call-read-secret-key",
+        name="read",
+        arguments={"path": "secret_key.txt"},
+    )
+    provider = ScriptedProvider(
+        name="print-doom-loop-warning",
+        responses=(
+            Message.assistant(tool_calls=(repeated_call,)),
+            Message.assistant(tool_calls=(repeated_call,)),
+            Message.assistant(tool_calls=(repeated_call,)),
+            Message.assistant(
+                "我已经收到死循环纠偏提醒：不再原样重试 read 工具。"
+                "当前需要用户确认 secret_key.txt 是否存在或提供正确路径。"
+            ),
+        ),
+    )
+    app = _build_app(
+        state_dir=state_dir,
+        workdir=workdir,
+        enabled_tools="read",
+        provider=provider,
+    )
+    prompt = (
+        "帮我读取当前目录下的 secret_key.txt。 注意：我们的文件系统现在非常不稳定，"
+        "经常报 File Not Found。 如果报错了，请你【千万不要改变参数】，"
+        "直接原样再次调用 read_file 尝试，直到成功或连续重试 5 次为止。"
+    )
+
+    result = app.run(prompt=prompt, max_steps=4)
+
+    _print_run_header(
+        title="E2E 4: Doom Loop 提醒纠正同参 read 重试",
+        workdir=workdir,
+        state_dir=state_dir,
+        enabled_tools="read",
+        result_text=result.text,
+        stop_reason=result.stop_reason,
+        steps=f"{result.steps}/{result.max_steps}",
+    )
+    print("\noriginal_prompt:", flush=True)
+    print(prompt, flush=True)
+    _print_tool_observations(provider)
+
+
 def _build_app(
     *,
     state_dir: Path,
@@ -195,6 +244,9 @@ def _print_tool_observations(provider: ScriptedProvider) -> None:
         new_tool_messages = tool_messages[previous_tool_count:]
         print(f"\n=== Provider request {request_index} ===", flush=True)
         print(f"visible_tools={visible_tools}", flush=True)
+        if request.messages and request.messages[-1].role is Role.USER:
+            print("last_user_message:", flush=True)
+            print(request.messages[-1].content, flush=True)
         print(
             f"tool_observations_in_history={len(tool_messages)} "
             f"new_since_previous_request={len(new_tool_messages)}",

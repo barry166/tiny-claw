@@ -549,6 +549,42 @@ def test_main_loop_stops_when_max_steps_exhausted(tmp_path) -> None:
     assert len(provider.requests) == 1
 
 
+def test_main_loop_appends_doom_loop_warning_after_repeated_tool_failures(tmp_path) -> None:
+    call = ToolCall(id="call-1", name="fake_tool", arguments={"message": "ok"})
+    provider = FakeProvider(
+        responses=[
+            Message.assistant(tool_calls=(call,)),
+            Message.assistant(tool_calls=(call,)),
+            Message.assistant(tool_calls=(call,)),
+            Message.assistant("blocked"),
+        ]
+    )
+    tools = ToolRegistry()
+    tools.register(ErrorTool())
+    engine = _build_engine(provider=provider, tools=tools, workdir=tmp_path)
+
+    result = engine.run(prompt="use tool", max_steps=4, session=_session(tmp_path))
+
+    assert result.text == "blocked"
+    assert result.stop_reason == STOP_REASON_FINAL
+    assert len(provider.requests) == 4
+    fourth_messages = provider.requests[3].messages
+    assert fourth_messages[-1].role is Role.USER
+    assert "你似乎陷入了死循环" in fourth_messages[-1].content
+    assert "连续 3 次使用相同的参数调用了 'fake_tool' 工具" in fourth_messages[-1].content
+    assert any(
+        message.role is Role.ASSISTANT and message.tool_calls == (call,)
+        for message in fourth_messages
+    )
+    blocked_observation = next(
+        message
+        for message in fourth_messages
+        if message.role is Role.TOOL and message.metadata.get("error_type") == "repeat_call_blocked"
+    )
+    assert blocked_observation.metadata["doom_loop_detected"] is True
+    assert fourth_messages.index(blocked_observation) < len(fourth_messages) - 1
+
+
 def test_main_loop_blocks_tool_calls_in_think_mode(tmp_path) -> None:
     call = ToolCall(id="call-1", name="fake_tool", arguments={"message": "ok"})
     provider = FakeProvider(responses=[Message.assistant(content="thinking", tool_calls=(call,))])

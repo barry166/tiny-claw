@@ -112,6 +112,12 @@ class ToolExecutor:
             message = result.to_message()
             metadata = dict(message.metadata)
             metadata.update(translation.metadata(attempt_count=attempt_count))
+            metadata.update(
+                {
+                    "doom_loop_detected": True,
+                    "doom_loop_tool": tool_call.name,
+                }
+            )
             output = ToolOutput(content=result.content, is_error=True)
             log_view.log_tool_error_fallback(
                 logger,
