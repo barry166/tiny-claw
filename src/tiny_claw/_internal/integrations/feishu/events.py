@@ -4,22 +4,29 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from importlib import import_module
-from typing import Any, Protocol, cast
+from typing import Any, Literal, Protocol, cast
 
 from tiny_claw._internal.app import Application
+from tiny_claw._internal.approval import ApprovalDecision
 from tiny_claw._internal.engine.main_loop import RunMode
 from tiny_claw._internal.errors import ConfigurationError
 from tiny_claw._internal.integrations.feishu.bot import (
     FeishuChannel,
     FeishuSdkMessageSender,
 )
+from tiny_claw._internal.session import SessionRef
 from tiny_claw._internal.settings import Settings
 
 logger = logging.getLogger(__name__)
 FEISHU_MESSAGE_EVENT = "message"
+APPROVAL_COMMAND_PATTERN = re.compile(
+    r"^/(?P<command>approve|reject)\s+(?P<approval_id>[A-Za-z0-9_-]+)(?:\s+(?P<reason>.*))?$",
+    re.I,
+)
 
 
 class WebhookChannel(Protocol):
@@ -48,6 +55,13 @@ class FeishuInboundMessage(Protocol):
     content_text: object
     chat_id: str
     message_id: str
+
+
+@dataclass(frozen=True)
+class ApprovalCommand:
+    decision: ApprovalDecision
+    approval_id: str
+    reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -119,7 +133,20 @@ class FeishuEventAdapter:
 
         channel = FeishuChannel(sender=sender)
         session = self.app.session_manager.resolve_feishu_chat(message.chat_id)
-        task = asyncio.create_task(
+        approval_command = parse_approval_command(text)
+        if approval_command is not None:
+            resume_task = asyncio.create_task(
+                asyncio.to_thread(
+                    self._resume_approval_command,
+                    command=approval_command,
+                    session=session,
+                    channel=channel,
+                )
+            )
+            resume_task.add_done_callback(_log_background_result)
+            return
+
+        run_task = asyncio.create_task(
             asyncio.to_thread(
                 self.app.run,
                 prompt=text,
@@ -129,7 +156,28 @@ class FeishuEventAdapter:
                 channel=channel,
             )
         )
-        task.add_done_callback(_log_background_result)
+        run_task.add_done_callback(_log_background_result)
+
+    def _resume_approval_command(
+        self,
+        *,
+        command: ApprovalCommand,
+        session: SessionRef,
+        channel: FeishuChannel,
+    ) -> None:
+        if self.app is None:
+            return
+        result = self.app.resume_approval(
+            approval_id=command.approval_id,
+            decision=command.decision,
+            reason=command.reason,
+            session=session,
+            channel=channel,
+        )
+        lines = [result.message]
+        if result.result_text:
+            lines.extend(["", result.result_text])
+        channel._send("\n".join(lines), reply=True)
 
 
 def _build_sdk_channel(
@@ -160,6 +208,21 @@ def _extract_message_text(message: FeishuInboundMessage) -> str | None:
     if kind == "text" and text:
         return text
     return None
+
+
+def parse_approval_command(text: str) -> ApprovalCommand | None:
+    match = APPROVAL_COMMAND_PATTERN.match(text.strip())
+    if match is None:
+        return None
+    command = cast(Literal["approve", "reject"], match.group("command").lower())
+    decision: ApprovalDecision = "approve" if command == "approve" else "reject"
+    reason = match.group("reason")
+    cleaned_reason = reason.strip() if reason is not None else ""
+    return ApprovalCommand(
+        decision=decision,
+        approval_id=match.group("approval_id"),
+        reason=cleaned_reason or None,
+    )
 
 
 def _log_background_result(task: asyncio.Task[Any]) -> None:

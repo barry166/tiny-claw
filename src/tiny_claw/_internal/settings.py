@@ -25,6 +25,8 @@ DEFAULT_CONTEXT_RETAIN_LAST_MESSAGES = 8
 DEFAULT_CONTEXT_OLD_TOOL_RESULT_MASK_CHARS = 240
 DEFAULT_CONTEXT_RECENT_TOOL_RESULT_HEAD_CHARS = 2_000
 DEFAULT_CONTEXT_RECENT_TOOL_RESULT_TAIL_CHARS = 2_000
+DEFAULT_APPROVAL_REQUIRED_TOOLS = ("bash", "edit", "write")
+APPROVAL_PROVIDERS = {"off", "feishu"}
 
 
 @dataclass(frozen=True)
@@ -51,6 +53,11 @@ class Settings:
     context_old_tool_result_mask_chars: int = DEFAULT_CONTEXT_OLD_TOOL_RESULT_MASK_CHARS
     context_recent_tool_result_head_chars: int = DEFAULT_CONTEXT_RECENT_TOOL_RESULT_HEAD_CHARS
     context_recent_tool_result_tail_chars: int = DEFAULT_CONTEXT_RECENT_TOOL_RESULT_TAIL_CHARS
+    tool_allowlist: tuple[str, ...] = ()
+    tool_denylist: tuple[str, ...] = ()
+    approval_required_tools: tuple[str, ...] = DEFAULT_APPROVAL_REQUIRED_TOOLS
+    approval_provider: str = "off"
+    approval_timeout_seconds: int = 3600
 
     @classmethod
     def from_env(
@@ -68,6 +75,12 @@ class Settings:
         workdir = Path(env.get("TINY_CLAW_WORKDIR", str(Path.cwd()))).expanduser().resolve()
         enabled_tools = _enabled_tools_env(env.get("TINY_CLAW_ENABLED_TOOLS"))
         server_port = _positive_int_env(env.get("TINY_CLAW_SERVER_PORT"), DEFAULT_SERVER_PORT)
+        approval_provider = env.get("TINY_CLAW_APPROVAL_PROVIDER", "off").strip().lower()
+        if approval_provider not in APPROVAL_PROVIDERS:
+            raise ConfigurationError(
+                "Invalid TINY_CLAW_APPROVAL_PROVIDER "
+                f"{approval_provider!r}; expected one of: {', '.join(sorted(APPROVAL_PROVIDERS))}"
+            )
 
         return cls(
             log_level=_normalize_log_level(resolved_log_level),
@@ -101,6 +114,17 @@ class Settings:
             feishu_verification_token=env.get("FEISHU_VERIFICATION_TOKEN"),
             feishu_encrypt_key=env.get("FEISHU_ENCRYPT_KEY"),
             feishu_event_path=_event_path_env(env.get("FEISHU_EVENT_PATH")),
+            tool_allowlist=_optional_tools_env(env.get("TINY_CLAW_TOOL_ALLOWLIST")),
+            tool_denylist=_optional_tools_env(env.get("TINY_CLAW_TOOL_DENYLIST")),
+            approval_required_tools=_optional_tools_env(
+                env.get("TINY_CLAW_APPROVAL_REQUIRED_TOOLS"),
+                default=DEFAULT_APPROVAL_REQUIRED_TOOLS,
+            ),
+            approval_provider=approval_provider,
+            approval_timeout_seconds=_positive_int_env(
+                env.get("TINY_CLAW_APPROVAL_TIMEOUT_SECONDS"),
+                3600,
+            ),
         )
 
 
@@ -163,6 +187,23 @@ def _enabled_tools_env(value: str | None) -> tuple[str, ...]:
     if unknown:
         raise ConfigurationError(
             f"Invalid TINY_CLAW_ENABLED_TOOLS {', '.join(unknown)!r}; "
+            f"expected tools from: {', '.join(sorted(SUPPORTED_TOOLS))}"
+        )
+    return tuple(sorted(set(names)))
+
+
+def _optional_tools_env(
+    value: str | None,
+    *,
+    default: tuple[str, ...] = (),
+) -> tuple[str, ...]:
+    if value is None:
+        return default
+    names = tuple(name.strip().lower() for name in value.split(",") if name.strip())
+    unknown = sorted(set(names) - SUPPORTED_TOOLS)
+    if unknown:
+        raise ConfigurationError(
+            f"Invalid tool policy value {', '.join(unknown)!r}; "
             f"expected tools from: {', '.join(sorted(SUPPORTED_TOOLS))}"
         )
     return tuple(sorted(set(names)))

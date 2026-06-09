@@ -7,11 +7,18 @@ import pytest
 
 from tiny_claw._internal.errors import ToolError
 from tiny_claw._internal.schema.message import ToolDefinition
+from tiny_claw._internal.session import SessionRef
 from tiny_claw._internal.tools.base import ToolInput, ToolOutput
 from tiny_claw._internal.tools.builtin.bash import BashTool
 from tiny_claw._internal.tools.builtin.edit import EditTool
 from tiny_claw._internal.tools.builtin.read import ReadTool
 from tiny_claw._internal.tools.builtin.write import WriteTool
+from tiny_claw._internal.tools.middleware import (
+    ToolExecutionContext,
+    ToolExecutionResult,
+    ToolNext,
+)
+from tiny_claw._internal.tools.policy import ToolPolicyMiddleware
 from tiny_claw._internal.tools.registry import ToolRegistry
 
 
@@ -54,6 +61,85 @@ def test_tool_registry_registers_and_calls_tool() -> None:
     assert registry.definitions() == (FakeTool().definition(),)
 
 
+def test_tool_registry_executes_middlewares_in_registration_order(tmp_path) -> None:
+    events: list[str] = []
+    registry = ToolRegistry()
+    registry.register(FakeTool())
+
+    def first(ctx: ToolExecutionContext, next: ToolNext) -> ToolExecutionResult:
+        events.append("first-before")
+        result = next(ctx)
+        events.append("first-after")
+        return result
+
+    def second(ctx: ToolExecutionContext, next: ToolNext) -> ToolExecutionResult:
+        events.append("second-before")
+        result = next(ctx)
+        events.append("second-after")
+        return result
+
+    registry.use(first)
+    registry.use(second)
+
+    result = registry.execute(_ctx(tmp_path, tool_name="fake", arguments={"message": "ok"}))
+
+    assert result.status == "completed"
+    assert result.output is not None
+    assert result.output.content == "ok"
+    assert events == ["first-before", "second-before", "second-after", "first-after"]
+
+
+def test_tool_registry_middleware_can_short_circuit(tmp_path) -> None:
+    registry = ToolRegistry()
+    registry.register(FakeTool())
+    registry.use(
+        lambda _ctx, _next: ToolExecutionResult.denied(
+            "blocked",
+            metadata={"error_type": "test_block"},
+        )
+    )
+
+    result = registry.execute(_ctx(tmp_path, tool_name="fake", arguments={"message": "ok"}))
+
+    assert result.status == "denied"
+    assert result.output is not None
+    assert result.output.content == "blocked"
+    assert result.metadata["error_type"] == "test_block"
+
+
+def test_tool_policy_middleware_allows_default_empty_policy(tmp_path) -> None:
+    registry = ToolRegistry()
+    registry.register(FakeTool())
+    registry.use(ToolPolicyMiddleware())
+
+    result = registry.execute(_ctx(tmp_path, tool_name="fake", arguments={"message": "ok"}))
+
+    assert result.status == "completed"
+    assert result.output is not None
+    assert result.output.content == "ok"
+
+
+def test_tool_policy_middleware_denies_denylist_and_allowlist(tmp_path) -> None:
+    deny_registry = ToolRegistry()
+    deny_registry.register(FakeTool())
+    deny_registry.use(ToolPolicyMiddleware(denylist=("fake",)))
+    allow_registry = ToolRegistry()
+    allow_registry.register(FakeTool())
+    allow_registry.use(ToolPolicyMiddleware(allowlist=("read",)))
+
+    denied_by_denylist = deny_registry.execute(
+        _ctx(tmp_path, tool_name="fake", arguments={"message": "ok"})
+    )
+    denied_by_allowlist = allow_registry.execute(
+        _ctx(tmp_path, tool_name="fake", arguments={"message": "ok"})
+    )
+
+    assert denied_by_denylist.status == "denied"
+    assert denied_by_denylist.metadata["tool_policy"] == "denylist"
+    assert denied_by_allowlist.status == "denied"
+    assert denied_by_allowlist.metadata["tool_policy"] == "allowlist"
+
+
 def test_tool_registry_rejects_duplicates() -> None:
     registry = ToolRegistry()
     registry.register(FakeTool())
@@ -67,6 +153,28 @@ def test_tool_registry_rejects_unknown_tool() -> None:
 
     with pytest.raises(ToolError, match="Unknown tool"):
         registry.get("missing")
+
+
+def _ctx(
+    tmp_path,
+    *,
+    tool_name: str,
+    arguments: dict[str, Any],
+) -> ToolExecutionContext:
+    return ToolExecutionContext(
+        tool_call_id="call-1",
+        tool_name=tool_name,
+        arguments=arguments,
+        session=SessionRef(
+            key="test-session",
+            source="test",
+            external_id="test",
+            workdir=tmp_path,
+            display_name="test",
+        ),
+        workdir=tmp_path,
+        visible_tool_names=(tool_name,),
+    )
 
 
 def test_bash_tool_runs_inside_workdir(tmp_path) -> None:

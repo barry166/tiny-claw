@@ -7,6 +7,10 @@ import logging
 from dataclasses import dataclass
 from typing import Protocol
 
+from tiny_claw._internal.approval import (
+    ApprovalDispatchResult,
+    ApprovalRequest,
+)
 from tiny_claw._internal.engine.channel import Channel
 from tiny_claw._internal.schema.message import Message, ToolCall
 
@@ -63,6 +67,28 @@ class FeishuChannel(Channel):
 
     def on_done(self, *, text: str, stop_reason: str, steps: int, max_steps: int) -> None:
         self._send(text, reply=True)
+
+    def request_approval(self, request: ApprovalRequest) -> ApprovalDispatchResult:
+        approval = request.approval
+        reasons = "；".join(approval.risk_reasons) if approval.risk_reasons else "高风险工具调用"
+        text = "\n".join(
+            [
+                "高危工具调用待审批：",
+                f"approval_id={approval.id}",
+                f"session={request.session.display_name}",
+                f"workdir={request.workdir}",
+                f"tool={approval.tool_name}",
+                f"reason={reasons}",
+                f"expires_at={approval.expires_at}",
+                "",
+                f"批准：/approve {approval.id}",
+                f"拒绝：/reject {approval.id} 原因",
+            ]
+        )
+        if self.sender is None:
+            return ApprovalDispatchResult(delivered=False, detail="feishu sender missing")
+        self._send(text, reply=True)
+        return ApprovalDispatchResult(delivered=True, detail="sent via feishu")
 
     def _send(self, text: str, *, reply: bool = False) -> None:
         if self.sender is not None:

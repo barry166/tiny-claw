@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from enum import StrEnum
 from functools import partial
-from pathlib import Path
 
+from tiny_claw._internal.approval import (
+    CHECKPOINT_DRAFT_METADATA_KEY,
+    ApprovalRecord,
+    FileRunCheckpointStore,
+    RunCheckpointDraft,
+)
 from tiny_claw._internal.context import (
     ContextBuilder,
     ContextCompactor,
@@ -18,7 +22,27 @@ from tiny_claw._internal.context import (
     plan_step_status,
 )
 from tiny_claw._internal.engine import log_view
+from tiny_claw._internal.engine.approval_resume import ApprovalResumeRunner
 from tiny_claw._internal.engine.channel import Channel, NullChannel, notify_channel
+from tiny_claw._internal.engine.observations import (
+    append_tool_observations,
+    approval_required_text,
+)
+from tiny_claw._internal.engine.run_policy import (
+    phase_for_step,
+    to_tool_choice,
+    tool_policy_for_phase,
+)
+from tiny_claw._internal.engine.run_types import (
+    STOP_REASON_APPROVAL_REQUIRED,
+    STOP_REASON_APPROVAL_RESUME_FAILED,
+    STOP_REASON_FINAL,
+    STOP_REASON_MAX_STEPS_EXHAUSTED,
+    STOP_REASON_TOOL_POLICY_BLOCKED,
+    RunMode,
+    RunResult,
+    ToolPolicy,
+)
 from tiny_claw._internal.engine.tool_executor import ToolExecutor
 from tiny_claw._internal.memory.file_store import FileMemoryStore
 from tiny_claw._internal.provider.base import LLMProvider, LLMRequest, ToolChoice
@@ -26,36 +50,19 @@ from tiny_claw._internal.schema.message import Message
 from tiny_claw._internal.session import SessionMemoryStore, SessionRef
 from tiny_claw._internal.tools.registry import ToolRegistry
 
-STOP_REASON_FINAL = "final"
-STOP_REASON_MAX_STEPS_EXHAUSTED = "max_steps_exhausted"
-STOP_REASON_TOOL_POLICY_BLOCKED = "tool_policy_blocked"
-
 logger = logging.getLogger(__name__)
 
-
-class ToolPolicy(StrEnum):
-    NONE = "none"
-    AUTO = "auto"
-
-
-class RunMode(StrEnum):
-    ACT = "act"
-    PLAN = "plan"
-    THINK = "think"
-    PLAN_ACT = "plan-act"
-
-
-@dataclass(frozen=True)
-class RunResult:
-    text: str
-    provider: str
-    steps: int
-    max_steps: int
-    workdir: Path
-    stop_reason: str
-    mode: RunMode = RunMode.ACT
-    tool_policy: ToolPolicy = ToolPolicy.AUTO
-    plan: str | None = None
+__all__ = [
+    "STOP_REASON_APPROVAL_REQUIRED",
+    "STOP_REASON_APPROVAL_RESUME_FAILED",
+    "STOP_REASON_FINAL",
+    "STOP_REASON_MAX_STEPS_EXHAUSTED",
+    "STOP_REASON_TOOL_POLICY_BLOCKED",
+    "MainLoop",
+    "RunMode",
+    "RunResult",
+    "ToolPolicy",
+]
 
 
 @dataclass(frozen=True)
@@ -65,6 +72,7 @@ class MainLoop:
     context_compactor: ContextCompactor
     memory: SessionMemoryStore
     tools: ToolRegistry
+    checkpoint_store: FileRunCheckpointStore | None = None
 
     @property
     def provider_name(self) -> str:
@@ -173,8 +181,8 @@ class MainLoop:
                 )
 
         for step in range(1, max_steps + 1):
-            phase = _phase_for_step(mode=mode, step=step, plan_required=plan_required)
-            tool_policy = _tool_policy_for_phase(phase)
+            phase = phase_for_step(mode=mode, step=step, plan_required=plan_required)
+            tool_policy = tool_policy_for_phase(phase)
             request_tool_definitions = (
                 registered_tool_definitions if tool_policy is ToolPolicy.AUTO else ()
             )
@@ -194,7 +202,7 @@ class MainLoop:
             log_view.log_model_request(
                 logger,
                 messages=len(messages),
-                tool_choice=_to_tool_choice(tool_policy).value,
+                tool_choice=to_tool_choice(tool_policy).value,
                 visible_tools=len(request_tool_definitions),
             )
             compaction = self.context_compactor.compact(messages)
@@ -213,7 +221,7 @@ class MainLoop:
                     messages=compaction.messages,
                     tools=request_tool_definitions,
                     max_steps=max_steps,
-                    tool_choice=_to_tool_choice(tool_policy),
+                    tool_choice=to_tool_choice(tool_policy),
                 )
             )
             messages.append(response.message)
@@ -396,11 +404,65 @@ class MainLoop:
                     channel=resolved_channel,
                 )
 
-            observations = tool_executor.run_tool_calls(
+            draft = RunCheckpointDraft(
+                mode=mode.value,
+                prompt=prompt,
+                step=step,
+                max_steps=max_steps,
+                phase=phase,
+                tool_policy=tool_policy.value,
+                provider=last_provider,
+                current_plan_todo_id=(
+                    current_plan_todo.id if current_plan_todo is not None else None
+                ),
+                current_step_had_tool_error=current_step_had_tool_error,
+                plan_required=plan_required,
+                visible_tool_names=tuple(
+                    definition.name for definition in registered_tool_definitions
+                ),
+                messages=tuple(messages),
+                pending_tool_calls=response.message.tool_calls,
+                pending_index=0,
+            )
+            batch = tool_executor.run_tool_batch(
                 response.message.tool_calls,
                 channel=resolved_channel,
+                session=session,
+                workdir=session.workdir,
+                context_metadata={
+                    CHECKPOINT_DRAFT_METADATA_KEY: draft,
+                    "approval_requester": resolved_channel,
+                },
             )
-            if _append_tool_observations(messages, observations):
+            if batch.suspended:
+                self._preserve_prior_observations_for_suspension(
+                    batch.observations,
+                    batch.suspension.checkpoint_id if batch.suspension else None,
+                    session=session,
+                )
+                response_text = approval_required_text(batch.observations)
+                return self._record_and_return_result(
+                    memory=session_memory,
+                    prompt=prompt,
+                    response=response_text,
+                    provider=last_provider,
+                    stop_reason=STOP_REASON_APPROVAL_REQUIRED,
+                    steps=step,
+                    max_steps=max_steps,
+                    session=session,
+                    run_mode=mode,
+                    phase=phase,
+                    tool_policy=tool_policy,
+                    plan=plan,
+                    channel=resolved_channel,
+                    approval_id=(
+                        batch.suspension.approval_id if batch.suspension is not None else None
+                    ),
+                    checkpoint_id=(
+                        batch.suspension.checkpoint_id if batch.suspension is not None else None
+                    ),
+                )
+            if append_tool_observations(messages, batch.observations):
                 current_step_had_tool_error = True
 
         return self._record_and_return_result(
@@ -503,6 +565,124 @@ class MainLoop:
             channel=channel,
         )
 
+    def resume_approved_approval(
+        self,
+        *,
+        approval: ApprovalRecord,
+        session: SessionRef,
+        channel: Channel | None = None,
+    ) -> RunResult:
+        return self._approval_resume_runner().resume_approved(
+            approval=approval,
+            session=session,
+            channel=channel,
+        )
+
+    def resume_rejected_approval(
+        self,
+        *,
+        approval: ApprovalRecord,
+        session: SessionRef,
+        channel: Channel | None = None,
+    ) -> RunResult:
+        return self._approval_resume_runner().resume_rejected(
+            approval=approval,
+            session=session,
+            channel=channel,
+        )
+
+    def _preserve_prior_observations_for_suspension(
+        self,
+        observations: tuple[Message, ...],
+        checkpoint_id: str | None,
+        *,
+        session: SessionRef,
+    ) -> None:
+        self._approval_resume_runner().preserve_prior_observations_for_suspension(
+            observations,
+            checkpoint_id,
+            session=session,
+        )
+
+    def _approval_resume_runner(self) -> ApprovalResumeRunner:
+        return ApprovalResumeRunner(
+            provider=self.provider,
+            context_compactor=self.context_compactor,
+            memory=self.memory,
+            tools=self.tools,
+            checkpoint_store=self.checkpoint_store,
+            return_result=self._return_result_from_runner,
+            record_and_return_result=self._record_and_return_result_from_runner,
+        )
+
+    def _return_result_from_runner(
+        self,
+        text: str,
+        provider: str,
+        stop_reason: str,
+        steps: int,
+        max_steps: int,
+        session: SessionRef,
+        mode: RunMode,
+        tool_policy: ToolPolicy,
+        plan: str | None,
+        channel: Channel,
+        phase: str | None,
+        approval_id: str | None,
+        checkpoint_id: str | None,
+    ) -> RunResult:
+        return self._return_result(
+            text=text,
+            provider=provider,
+            stop_reason=stop_reason,
+            steps=steps,
+            max_steps=max_steps,
+            session=session,
+            mode=mode,
+            tool_policy=tool_policy,
+            plan=plan,
+            channel=channel,
+            phase=phase,
+            approval_id=approval_id,
+            checkpoint_id=checkpoint_id,
+        )
+
+    def _record_and_return_result_from_runner(
+        self,
+        memory: FileMemoryStore,
+        prompt: str,
+        response: str,
+        provider: str,
+        stop_reason: str,
+        steps: int,
+        max_steps: int,
+        session: SessionRef,
+        run_mode: RunMode,
+        phase: str | None,
+        tool_policy: ToolPolicy,
+        plan: str | None,
+        channel: Channel,
+        approval_id: str | None,
+        checkpoint_id: str | None,
+    ) -> RunResult:
+        return self._record_and_return_result(
+            memory=memory,
+            prompt=prompt,
+            response=response,
+            provider=provider,
+            stop_reason=stop_reason,
+            steps=steps,
+            max_steps=max_steps,
+            session=session,
+            run_mode=run_mode,
+            phase=phase,
+            tool_policy=tool_policy,
+            plan=plan,
+            channel=channel,
+            approval_id=approval_id,
+            checkpoint_id=checkpoint_id,
+        )
+
     def _return_result(
         self,
         *,
@@ -517,6 +697,8 @@ class MainLoop:
         plan: str | None,
         channel: Channel,
         phase: str | None = None,
+        approval_id: str | None = None,
+        checkpoint_id: str | None = None,
     ) -> RunResult:
         log_view.log_run_complete(
             logger,
@@ -551,6 +733,8 @@ class MainLoop:
             mode=mode,
             tool_policy=tool_policy,
             plan=plan,
+            approval_id=approval_id,
+            checkpoint_id=checkpoint_id,
         )
 
     def _record_and_return_result(
@@ -569,6 +753,8 @@ class MainLoop:
         tool_policy: ToolPolicy,
         plan: str | None,
         channel: Channel,
+        approval_id: str | None = None,
+        checkpoint_id: str | None = None,
     ) -> RunResult:
         self._record_run(memory=memory, prompt=prompt, response=response)
         return self._return_result(
@@ -583,6 +769,8 @@ class MainLoop:
             plan=plan,
             channel=channel,
             phase=phase,
+            approval_id=approval_id,
+            checkpoint_id=checkpoint_id,
         )
 
     def _record_run(self, *, memory: FileMemoryStore, prompt: str, response: str) -> None:
@@ -629,55 +817,3 @@ class MainLoop:
                 max_steps=max_steps,
             )
         )
-
-
-def _to_tool_choice(policy: ToolPolicy) -> ToolChoice:
-    if policy is ToolPolicy.NONE:
-        return ToolChoice.NONE
-    return ToolChoice.AUTO
-
-
-def _phase_for_step(*, mode: RunMode, step: int, plan_required: bool = False) -> str:
-    if mode is RunMode.THINK:
-        return "think"
-    if mode is RunMode.PLAN_ACT and plan_required and step == 1:
-        return "plan"
-    if mode is RunMode.PLAN_ACT:
-        return "act"
-    return "act"
-
-
-def _tool_policy_for_phase(phase: str) -> ToolPolicy:
-    if phase in {"think", "plan"}:
-        return ToolPolicy.NONE
-    return ToolPolicy.AUTO
-
-
-def _append_tool_observations(messages: list[Message], observations: tuple[Message, ...]) -> bool:
-    messages.extend(observations)
-    warning = _doom_loop_warning_for(observations)
-    if warning is not None:
-        messages.append(Message.user(warning))
-    return any(message.metadata.get("is_error") is True for message in observations)
-
-
-def _doom_loop_warning_for(observations: tuple[Message, ...]) -> str | None:
-    for observation in observations:
-        if observation.metadata.get("doom_loop_detected") is not True:
-            continue
-        attempt = int(observation.metadata.get("attempt", 0))
-        tool_name = str(observation.metadata.get("doom_loop_tool") or observation.name or "unknown")
-        return _render_doom_loop_warning(attempt=attempt, tool_name=tool_name)
-    return None
-
-
-def _render_doom_loop_warning(*, attempt: int, tool_name: str) -> str:
-    return (
-        f"你似乎陷入了死循环。你刚刚连续 {attempt} 次使用相同的参数调用了 "
-        f"'{tool_name}' 工具，并且都失败了。请立即停止这种无效的重试！"
-        "你的注意力被当前的报错过度吸引了。你需要："
-        "1. 停止猜测参数。跳出当前的局部思维。"
-        "2. 彻底改变你的策略。"
-        "3. 如果你确实无法通过系统工具解决当前问题，请直接结束任务并向用户说明"
-        "你需要什么人工帮助，而不是继续盲目消耗 API 资源尝试。"
-    )

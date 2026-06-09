@@ -7,12 +7,19 @@ from typing import Any
 from aiohttp.test_utils import TestClient, TestServer
 
 from tiny_claw._internal.app import build_application
+from tiny_claw._internal.approval import (
+    ApprovalRecord,
+    ApprovalRequest,
+    ApprovalResumeResult,
+)
 from tiny_claw._internal.engine.channel import Channel
 from tiny_claw._internal.engine.main_loop import RunMode
 from tiny_claw._internal.integrations.feishu import FeishuChannel, FeishuEventAdapter
 from tiny_claw._internal.integrations.feishu.bot import FeishuSdkMessageSender
+from tiny_claw._internal.integrations.feishu.events import parse_approval_command
 from tiny_claw._internal.schema.message import Message, Role, ToolCall
 from tiny_claw._internal.server import FEISHU_ADAPTER_KEY, ServerConfig, build_web_app
+from tiny_claw._internal.session import SessionRef
 from tiny_claw._internal.settings import Settings
 
 
@@ -66,6 +73,60 @@ def test_feishu_channel_prints_tool_error_fallback_hint() -> None:
     assert sender.messages == [
         ("工具 read 失败，已触发错误兜底：read_path_not_found。建议下一步：bash。", False),
     ]
+
+
+def test_feishu_channel_sends_approval_request(tmp_path) -> None:
+    sender = RecordingSender()
+    channel = FeishuChannel(sender=sender)
+    session = SessionRef(
+        key="session-key",
+        source="feishu",
+        external_id="chat:chat-id",
+        workdir=tmp_path,
+        display_name="chat:chat-id",
+    )
+    request = ApprovalRequest(
+        approval=ApprovalRecord(
+            id="approval-1",
+            session_key=session.key,
+            session_source=session.source,
+            session_external_id=session.external_id,
+            tool_call_id="call-1",
+            tool_name="bash",
+            arguments={"command": "rm -rf build"},
+            tool_call_hash="hash",
+            risk_reasons=("删除文件或目录",),
+            checkpoint_id="checkpoint-1",
+            status="pending",
+            created_at="2026-06-08T00:00:00+00:00",
+            expires_at="2026-06-08T01:00:00+00:00",
+        ),
+        session=session,
+        workdir=tmp_path,
+    )
+
+    result = channel.request_approval(request)
+
+    assert result.delivered is True
+    assert sender.messages
+    text, reply = sender.messages[-1]
+    assert reply is True
+    assert "高危工具调用待审批" in text
+    assert "approval_id=approval-1" in text
+    assert "/approve approval-1" in text
+
+
+def test_parse_approval_command() -> None:
+    approved = parse_approval_command("/approve abc123")
+    rejected = parse_approval_command("/reject abc123 too risky")
+
+    assert approved is not None
+    assert approved.decision == "approve"
+    assert approved.approval_id == "abc123"
+    assert approved.reason is None
+    assert rejected is not None
+    assert rejected.decision == "reject"
+    assert rejected.reason == "too risky"
 
 
 def test_feishu_sdk_sender_replies_with_original_message_id() -> None:
@@ -135,6 +196,56 @@ async def _run_feishu_event_adapter_dispatches_background_run(tmp_path) -> None:
     assert sdk_channel.sent[-1] == (
         "chat-id",
         {"text": "hello from feishu"},
+        {"reply_to": "message-id"},
+    )
+
+
+def test_feishu_event_adapter_routes_approval_command_to_resume(tmp_path) -> None:
+    asyncio.run(_run_feishu_event_adapter_routes_approval_command_to_resume(tmp_path))
+
+
+async def _run_feishu_event_adapter_routes_approval_command_to_resume(tmp_path) -> None:
+    app = build_application(_echo_settings(tmp_path))
+    resume_calls: list[dict[str, Any]] = []
+
+    def fake_resume_approval(**kwargs: Any) -> ApprovalResumeResult:
+        resume_calls.append(kwargs)
+        return ApprovalResumeResult(
+            ok=True,
+            message="已批准审批 approval-1。",
+            result_text="resume done",
+        )
+
+    object.__setattr__(app, "resume_approval", fake_resume_approval)
+    sdk_channel = RecordingSdkChannel()
+    adapter = FeishuEventAdapter(
+        app=app,
+        sdk_channel=sdk_channel,
+        max_steps=1,
+        mode=RunMode.ACT,
+    )
+
+    await adapter._on_message(
+        FakeInboundMessage(
+            content=FakeContent(kind="text"),
+            content_text="/approve approval-1",
+            chat_id="chat-a",
+        )
+    )
+    await asyncio.sleep(0.05)
+
+    assert len(resume_calls) == 1
+    assert resume_calls[0]["approval_id"] == "approval-1"
+    assert resume_calls[0]["decision"] == "approve"
+    assert (
+        app.session_manager.memory_store(
+            app.session_manager.resolve_feishu_chat("chat-a")
+        ).read_recent(limit=2)
+        == ()
+    )
+    assert sdk_channel.sent[-1] == (
+        "chat-a",
+        {"text": "已批准审批 approval-1。\n\nresume done"},
         {"reply_to": "message-id"},
     )
 

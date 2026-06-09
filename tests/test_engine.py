@@ -3,8 +3,15 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from tiny_claw._internal.approval import (
+    DefaultRiskPolicy,
+    FileApprovalStore,
+    FileRunCheckpointStore,
+    HumanApprovalMiddleware,
+)
 from tiny_claw._internal.context import ContextBuilder, ContextCompactor
 from tiny_claw._internal.engine.main_loop import (
+    STOP_REASON_APPROVAL_REQUIRED,
     STOP_REASON_FINAL,
     STOP_REASON_MAX_STEPS_EXHAUSTED,
     STOP_REASON_TOOL_POLICY_BLOCKED,
@@ -64,6 +71,15 @@ class FakeTool:
 
     def run(self, input: ToolInput) -> ToolOutput:
         return ToolOutput(content=f"observed:{input.arguments['message']}")
+
+
+class CountingTool(FakeTool):
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def run(self, input: ToolInput) -> ToolOutput:
+        self.calls += 1
+        return super().run(input)
 
 
 class ErrorTool(FakeTool):
@@ -838,6 +854,178 @@ def test_main_loop_plan_act_keeps_todo_open_and_records_blocker_on_tool_error(tm
     assert "TC-001:" in todo_text
 
 
+def test_main_loop_suspends_high_risk_tool_for_approval(tmp_path) -> None:
+    tool = CountingTool()
+    call = ToolCall(id="call-approve", name="fake_tool", arguments={"message": "danger"})
+    provider = FakeProvider(responses=[Message.assistant(tool_calls=(call,))])
+    approval_store = FileApprovalStore(tmp_path / "state")
+    checkpoint_store = FileRunCheckpointStore(tmp_path / "state")
+    tools = ToolRegistry()
+    tools.register(tool)
+    tools.use(
+        HumanApprovalMiddleware(
+            approval_store=approval_store,
+            checkpoint_store=checkpoint_store,
+            risk_policy=DefaultRiskPolicy(approval_required_tools=("fake_tool",)),
+        )
+    )
+    engine = _build_engine(
+        provider=provider,
+        tools=tools,
+        workdir=tmp_path,
+        checkpoint_store=checkpoint_store,
+    )
+    session = _session(tmp_path)
+
+    result = engine.run(prompt="use dangerous tool", max_steps=2, session=session)
+
+    assert result.stop_reason == STOP_REASON_APPROVAL_REQUIRED
+    assert result.approval_id is not None
+    assert result.checkpoint_id is not None
+    assert "工具调用需要人工审批" in result.text
+    assert tool.calls == 0
+    approval = approval_store.read(session.key, result.approval_id)
+    checkpoint = checkpoint_store.read(session_key=session.key, checkpoint_id=result.checkpoint_id)
+    assert approval.status == "pending"
+    assert approval.tool_name == "fake_tool"
+    assert checkpoint.pending_tool_calls == (call,)
+
+
+def test_main_loop_resumes_approved_high_risk_tool(tmp_path) -> None:
+    tool = CountingTool()
+    call = ToolCall(id="call-approve", name="fake_tool", arguments={"message": "danger"})
+    provider = FakeProvider(
+        responses=[
+            Message.assistant(tool_calls=(call,)),
+            Message.assistant("approved tool completed"),
+        ]
+    )
+    approval_store = FileApprovalStore(tmp_path / "state")
+    checkpoint_store = FileRunCheckpointStore(tmp_path / "state")
+    tools = ToolRegistry()
+    tools.register(tool)
+    tools.use(
+        HumanApprovalMiddleware(
+            approval_store=approval_store,
+            checkpoint_store=checkpoint_store,
+            risk_policy=DefaultRiskPolicy(approval_required_tools=("fake_tool",)),
+        )
+    )
+    engine = _build_engine(
+        provider=provider,
+        tools=tools,
+        workdir=tmp_path,
+        checkpoint_store=checkpoint_store,
+    )
+    session = _session(tmp_path)
+    suspended = engine.run(prompt="use dangerous tool", max_steps=2, session=session)
+    assert suspended.approval_id is not None
+    approval = approval_store.approve(approval_store.read(session.key, suspended.approval_id))
+
+    resumed = engine.resume_approved_approval(
+        approval=approval,
+        session=session,
+    )
+
+    assert resumed.stop_reason == STOP_REASON_FINAL
+    assert resumed.text == "approved tool completed"
+    assert tool.calls == 1
+    assert provider.requests[1].messages[-1].role is Role.TOOL
+    assert provider.requests[1].messages[-1].content == "observed:danger"
+    consumed = approval_store.read(session.key, suspended.approval_id)
+    assert consumed.status == "consumed"
+
+
+def test_main_loop_consumes_approval_after_approved_tool_error(tmp_path) -> None:
+    call = ToolCall(id="call-error", name="fake_tool", arguments={"message": "danger"})
+    provider = FakeProvider(
+        responses=[
+            Message.assistant(tool_calls=(call,)),
+            Message.assistant("tool failed after approval"),
+        ]
+    )
+    approval_store = FileApprovalStore(tmp_path / "state")
+    checkpoint_store = FileRunCheckpointStore(tmp_path / "state")
+    tools = ToolRegistry()
+    tools.register(ErrorTool())
+    tools.use(
+        HumanApprovalMiddleware(
+            approval_store=approval_store,
+            checkpoint_store=checkpoint_store,
+            risk_policy=DefaultRiskPolicy(approval_required_tools=("fake_tool",)),
+        )
+    )
+    engine = _build_engine(
+        provider=provider,
+        tools=tools,
+        workdir=tmp_path,
+        checkpoint_store=checkpoint_store,
+    )
+    session = _session(tmp_path)
+    suspended = engine.run(prompt="use dangerous tool", max_steps=2, session=session)
+    assert suspended.approval_id is not None
+    approval = approval_store.approve(approval_store.read(session.key, suspended.approval_id))
+
+    resumed = engine.resume_approved_approval(
+        approval=approval,
+        session=session,
+    )
+
+    assert resumed.stop_reason == STOP_REASON_FINAL
+    failed_observation = provider.requests[1].messages[-1]
+    assert failed_observation.role is Role.TOOL
+    assert failed_observation.metadata["is_error"] is True
+    assert approval_store.read(session.key, suspended.approval_id).status == "consumed"
+
+
+def test_main_loop_resumes_rejected_high_risk_tool_as_observation(tmp_path) -> None:
+    tool = CountingTool()
+    call = ToolCall(id="call-reject", name="fake_tool", arguments={"message": "danger"})
+    provider = FakeProvider(
+        responses=[
+            Message.assistant(tool_calls=(call,)),
+            Message.assistant("user rejected tool"),
+        ]
+    )
+    approval_store = FileApprovalStore(tmp_path / "state")
+    checkpoint_store = FileRunCheckpointStore(tmp_path / "state")
+    tools = ToolRegistry()
+    tools.register(tool)
+    tools.use(
+        HumanApprovalMiddleware(
+            approval_store=approval_store,
+            checkpoint_store=checkpoint_store,
+            risk_policy=DefaultRiskPolicy(approval_required_tools=("fake_tool",)),
+        )
+    )
+    engine = _build_engine(
+        provider=provider,
+        tools=tools,
+        workdir=tmp_path,
+        checkpoint_store=checkpoint_store,
+    )
+    session = _session(tmp_path)
+    suspended = engine.run(prompt="use dangerous tool", max_steps=2, session=session)
+    assert suspended.approval_id is not None
+    approval = approval_store.reject(
+        approval_store.read(session.key, suspended.approval_id),
+        reason="too risky",
+    )
+
+    resumed = engine.resume_rejected_approval(
+        approval=approval,
+        session=session,
+    )
+
+    assert resumed.stop_reason == STOP_REASON_FINAL
+    assert resumed.text == "user rejected tool"
+    assert tool.calls == 0
+    rejection = provider.requests[1].messages[-1]
+    assert rejection.role is Role.TOOL
+    assert rejection.metadata["error_type"] == "approval_rejected"
+    assert "too risky" in rejection.content
+
+
 def _build_engine(
     *,
     provider: FakeProvider,
@@ -845,6 +1033,7 @@ def _build_engine(
     memory: SessionMemoryStore | None = None,
     tools: ToolRegistry | None = None,
     context_compactor: ContextCompactor | None = None,
+    checkpoint_store: FileRunCheckpointStore | None = None,
 ) -> MainLoop:
     return MainLoop(
         provider=provider,
@@ -852,6 +1041,7 @@ def _build_engine(
         context_compactor=context_compactor or ContextCompactor(),
         memory=memory or SessionMemoryStore(workdir / "state"),
         tools=tools or ToolRegistry(),
+        checkpoint_store=checkpoint_store,
     )
 
 

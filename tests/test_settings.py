@@ -49,6 +49,29 @@ def test_settings_reads_enabled_tools_from_environment() -> None:
     assert settings.enabled_tools == ("bash", "edit", "read", "write")
 
 
+def test_settings_reads_runtime_tool_policy_and_approval_configuration() -> None:
+    settings = Settings.from_env(
+        {
+            "TINY_CLAW_TOOL_ALLOWLIST": "read,write",
+            "TINY_CLAW_TOOL_DENYLIST": "bash",
+            "TINY_CLAW_APPROVAL_REQUIRED_TOOLS": "write,edit",
+            "TINY_CLAW_APPROVAL_PROVIDER": "feishu",
+            "TINY_CLAW_APPROVAL_TIMEOUT_SECONDS": "120",
+        }
+    )
+
+    assert settings.tool_allowlist == ("read", "write")
+    assert settings.tool_denylist == ("bash",)
+    assert settings.approval_required_tools == ("edit", "write")
+    assert settings.approval_provider == "feishu"
+    assert settings.approval_timeout_seconds == 120
+
+
+def test_settings_rejects_invalid_approval_provider() -> None:
+    with pytest.raises(ConfigurationError, match="APPROVAL_PROVIDER"):
+        Settings.from_env({"TINY_CLAW_APPROVAL_PROVIDER": "slack"})
+
+
 def test_settings_rejects_unknown_enabled_tool() -> None:
     with pytest.raises(ConfigurationError, match="ENABLED_TOOLS"):
         Settings.from_env({"TINY_CLAW_ENABLED_TOOLS": "read,unknown"})

@@ -5,6 +5,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from tiny_claw._internal.approval import (
+    ApprovalDecision,
+    ApprovalResumeResult,
+    DefaultRiskPolicy,
+    FileApprovalStore,
+    FileRunCheckpointStore,
+    HumanApprovalMiddleware,
+)
 from tiny_claw._internal.context import ContextBuilder, ContextCompactor
 from tiny_claw._internal.engine.channel import Channel
 from tiny_claw._internal.engine.main_loop import MainLoop, RunMode, RunResult
@@ -20,6 +28,7 @@ from tiny_claw._internal.tools.builtin.bash import BashTool
 from tiny_claw._internal.tools.builtin.edit import EditTool
 from tiny_claw._internal.tools.builtin.read import ReadTool
 from tiny_claw._internal.tools.builtin.write import WriteTool
+from tiny_claw._internal.tools.policy import ToolPolicyMiddleware
 from tiny_claw._internal.tools.registry import ToolRegistry
 
 
@@ -48,6 +57,8 @@ class Application:
     engine: MainLoop
     tools: ToolRegistry
     session_manager: SessionManager
+    approval_store: FileApprovalStore
+    checkpoint_store: FileRunCheckpointStore
 
     def health(self) -> HealthReport:
         return HealthReport(
@@ -81,6 +92,52 @@ class Application:
             channel=channel,
         )
 
+    def resume_approval(
+        self,
+        *,
+        approval_id: str,
+        decision: ApprovalDecision,
+        session: SessionRef,
+        reason: str | None = None,
+        channel: Channel | None = None,
+    ) -> ApprovalResumeResult:
+        record = self.approval_store.find(approval_id)
+        if record is None:
+            return ApprovalResumeResult(ok=False, message=f"未找到审批请求：{approval_id}")
+        if record.session_key != session.key:
+            return ApprovalResumeResult(ok=False, message="审批请求不属于当前会话，已拒绝。")
+        if record.status != "pending":
+            return ApprovalResumeResult(
+                ok=False,
+                message=f"审批请求 {approval_id} 当前状态为 {record.status}，不能重复处理。",
+            )
+        if record.is_expired:
+            self.approval_store.expire(record)
+            return ApprovalResumeResult(ok=False, message=f"审批请求 {approval_id} 已过期。")
+        if decision == "reject":
+            rejected = self.approval_store.reject(record, reason=reason)
+            result = self.engine.resume_rejected_approval(
+                approval=rejected,
+                session=session,
+                channel=channel,
+            )
+            return ApprovalResumeResult(
+                ok=True,
+                message=f"已拒绝审批 {approval_id}。",
+                result_text=result.text,
+            )
+        approved = self.approval_store.approve(record, reason=reason)
+        result = self.engine.resume_approved_approval(
+            approval=approved,
+            session=session,
+            channel=channel,
+        )
+        return ApprovalResumeResult(
+            ok=True,
+            message=f"已批准审批 {approval_id}。",
+            result_text=result.text,
+        )
+
 
 def build_application(
     settings: Settings,
@@ -94,6 +151,14 @@ def build_application(
     )
     memory = SessionMemoryStore(settings.state_dir)
     tools = _build_tool_registry(settings.workdir, enabled_tools=settings.enabled_tools)
+    approval_store = FileApprovalStore(settings.state_dir)
+    checkpoint_store = FileRunCheckpointStore(settings.state_dir)
+    _register_tool_middlewares(
+        tools,
+        settings=settings,
+        approval_store=approval_store,
+        checkpoint_store=checkpoint_store,
+    )
     engine = MainLoop(
         provider=resolved_provider,
         context_builder=ContextBuilder(workdir=settings.workdir),
@@ -106,12 +171,15 @@ def build_application(
         ),
         memory=memory,
         tools=tools,
+        checkpoint_store=checkpoint_store,
     )
     return Application(
         settings=settings,
         engine=engine,
         tools=tools,
         session_manager=session_manager,
+        approval_store=approval_store,
+        checkpoint_store=checkpoint_store,
     )
 
 
@@ -167,3 +235,28 @@ def _build_tool_registry(
     for name in enabled_tools:
         registry.register(available_tools[name])
     return registry
+
+
+def _register_tool_middlewares(
+    registry: ToolRegistry,
+    *,
+    settings: Settings,
+    approval_store: FileApprovalStore,
+    checkpoint_store: FileRunCheckpointStore,
+) -> None:
+    registry.use(
+        ToolPolicyMiddleware(
+            allowlist=settings.tool_allowlist,
+            denylist=settings.tool_denylist,
+        )
+    )
+    if settings.approval_provider == "off":
+        return
+    registry.use(
+        HumanApprovalMiddleware(
+            approval_store=approval_store,
+            checkpoint_store=checkpoint_store,
+            risk_policy=DefaultRiskPolicy(approval_required_tools=settings.approval_required_tools),
+            timeout_seconds=settings.approval_timeout_seconds,
+        )
+    )
