@@ -19,5 +19,12 @@
 | `13-智能体-cli-测试策略.md` | 如何测试一个带工具和持久状态的 Agent CLI | Agent 工程化测试体系 | 测试工程师 / 后续维护者 |
 | `14-edit-分层降级匹配管线.md` | 从精确匹配到缩进归一：Agent 文件编辑的匹配策略设计 | `edit` 分层降级匹配管线 | 工具系统维护者 / Agent 框架开发者 |
 | `15-真实-provider-edit-demo.md` | 用真实模型验收 Agent 的文件编辑工具 | 真实 Provider 编辑流程 Demo | 项目使用者 / 后续维护者 |
+| `16-通用-tool-middleware-链式执行.md` | 让 ToolRegistry 支持通用 Middleware 链式执行 | 通用 Tool Middleware 链 | Agent 框架开发者 / 工具系统维护者 |
+| `17-运行时工具策略-allowlist-denylist.md` | 用 Allowlist 和 Denylist 控制运行时工具策略 | 运行时工具策略 | 项目使用者 / 工具系统维护者 |
+| `18-高危工具调用人工审批-middleware.md` | 用 HumanApprovalMiddleware 拦截高危工具调用 | 高危工具调用人工审批 | Agent 框架开发者 / 安全策略维护者 |
+| `19-审批-checkpoint-暂停恢复.md` | 用 Checkpoint 实现审批后的暂停与恢复 | 审批状态与 checkpoint 恢复 | Agent 主循环开发者 / 状态管理维护者 |
+| `20-飞书审批-adapter.md` | 把飞书接成审批 Adapter，而不是工具 | Feishu 审批 Adapter | 外部集成维护者 / Agent 平台开发者 |
+| `21-审批流程测试与验证.md` | 如何测试高危工具审批流程 | 审批流程测试 | 测试工程师 / 项目使用者 |
+| `22-mainloop-审批恢复重构.md` | 拆分 MainLoop 中的审批恢复职责 | MainLoop 审批恢复重构 | 后续维护者 / Agent 主循环开发者 |
 
 > 说明：这些教程按当前代码库中的已实现模块组织。发布到具体版本文档时，应以对应版本的代码和测试结果为准。
