@@ -132,10 +132,16 @@ def log_model_response(
         )
 
 
-def log_tool_call(logger: logging.Logger, call: ToolCall) -> None:
+def log_tool_call(
+    logger: logging.Logger,
+    call: ToolCall,
+    *,
+    context: str | None = None,
+) -> None:
     logger.info(
-        "  -> %s 执行工具: %s\n%s",
+        "  -> %s%s 执行工具: %s\n%s",
         color("🛠", COLOR_YELLOW),
+        _context_suffix(context),
         color(call.name, COLOR_YELLOW),
         indent(
             "args: "
@@ -148,7 +154,13 @@ def log_tool_call(logger: logging.Logger, call: ToolCall) -> None:
     )
 
 
-def log_tool_result(logger: logging.Logger, *, name: str, output: ToolOutput) -> None:
+def log_tool_result(
+    logger: logging.Logger,
+    *,
+    name: str,
+    output: ToolOutput,
+    context: str | None = None,
+) -> None:
     if output.is_error:
         marker = color("❌ 工具失败", COLOR_RED)
         level = logger.warning
@@ -157,8 +169,9 @@ def log_tool_result(logger: logging.Logger, *, name: str, output: ToolOutput) ->
         level = logger.info
 
     level(
-        "  -> %s: %s (返回 %s 字符)\n%s",
+        "  -> %s%s: %s (返回 %s 字符)\n%s",
         marker,
+        _context_suffix(context),
         color(name, COLOR_GREEN if not output.is_error else COLOR_RED),
         len(output.content),
         indent(
@@ -177,14 +190,16 @@ def log_tool_error_fallback(
     attempt_count: int,
     retryable: bool,
     suggested_tool: str | None = None,
+    context: str | None = None,
 ) -> None:
     suggested = suggested_tool or "none"
     logger.warning(
         (
-            "  -> %s 工具错误兜底已触发：已把失败翻译成下一步建议 "
+            "  -> %s%s 工具错误兜底已触发：已把失败翻译成下一步建议 "
             "tool=%s error_type=%s attempt=%s retryable=%s suggested_tool=%s"
         ),
         color("[ToolFallback]", COLOR_YELLOW),
+        _context_suffix(context),
         color(name, COLOR_RED),
         error_type,
         attempt_count,
@@ -193,10 +208,17 @@ def log_tool_error_fallback(
     )
 
 
-def log_tool_exception(logger: logging.Logger, *, name: str, error: str) -> None:
+def log_tool_exception(
+    logger: logging.Logger,
+    *,
+    name: str,
+    error: str,
+    context: str | None = None,
+) -> None:
     logger.warning(
-        "  -> %s: %s\n%s",
+        "  -> %s%s: %s\n%s",
         color("❌ 工具异常", COLOR_RED),
+        _context_suffix(context),
         color(name, COLOR_RED),
         indent("error: " + error, prefix="     "),
     )
@@ -276,3 +298,9 @@ def indent(text: str, *, prefix: str = "  ") -> str:
 
 def color(text: object, color_code: str) -> str:
     return f"{color_code}{text}{COLOR_RESET}"
+
+
+def _context_suffix(context: str | None) -> str:
+    if not context:
+        return ""
+    return " " + color(f"[{context}]", COLOR_DIM)

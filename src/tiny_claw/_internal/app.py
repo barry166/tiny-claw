@@ -23,9 +23,11 @@ from tiny_claw._internal.provider.echo import EchoProvider
 from tiny_claw._internal.provider.openai import OpenAIProvider
 from tiny_claw._internal.session import SessionManager, SessionMemoryStore, SessionRef
 from tiny_claw._internal.settings import DEFAULT_OPENAI_MODEL, Settings
+from tiny_claw._internal.subagent import SubagentRunner
 from tiny_claw._internal.tools.base import Tool
 from tiny_claw._internal.tools.builtin.bash import BashTool
 from tiny_claw._internal.tools.builtin.edit import EditTool
+from tiny_claw._internal.tools.builtin.explore import ExplorerSubagentTool
 from tiny_claw._internal.tools.builtin.read import ReadTool
 from tiny_claw._internal.tools.builtin.write import WriteTool
 from tiny_claw._internal.tools.policy import ToolPolicyMiddleware
@@ -150,7 +152,25 @@ def build_application(
         workdir=settings.workdir,
     )
     memory = SessionMemoryStore(settings.state_dir)
-    tools = _build_tool_registry(settings.workdir, enabled_tools=settings.enabled_tools)
+    context_builder = ContextBuilder(workdir=settings.workdir)
+    context_compactor = ContextCompactor(
+        max_chars=settings.context_max_chars,
+        retain_last_messages=settings.context_retain_last_messages,
+        old_tool_result_mask_chars=settings.context_old_tool_result_mask_chars,
+        recent_tool_result_head_chars=settings.context_recent_tool_result_head_chars,
+        recent_tool_result_tail_chars=settings.context_recent_tool_result_tail_chars,
+    )
+    subagent_runner = SubagentRunner(
+        provider=resolved_provider,
+        context_builder=context_builder,
+        context_compactor=context_compactor,
+        memory=memory,
+    )
+    tools = _build_tool_registry(
+        settings.workdir,
+        enabled_tools=settings.enabled_tools,
+        subagent_runner=subagent_runner,
+    )
     approval_store = FileApprovalStore(settings.state_dir)
     checkpoint_store = FileRunCheckpointStore(settings.state_dir)
     _register_tool_middlewares(
@@ -161,14 +181,8 @@ def build_application(
     )
     engine = MainLoop(
         provider=resolved_provider,
-        context_builder=ContextBuilder(workdir=settings.workdir),
-        context_compactor=ContextCompactor(
-            max_chars=settings.context_max_chars,
-            retain_last_messages=settings.context_retain_last_messages,
-            old_tool_result_mask_chars=settings.context_old_tool_result_mask_chars,
-            recent_tool_result_head_chars=settings.context_recent_tool_result_head_chars,
-            recent_tool_result_tail_chars=settings.context_recent_tool_result_tail_chars,
-        ),
+        context_builder=context_builder,
+        context_compactor=context_compactor,
         memory=memory,
         tools=tools,
         checkpoint_store=checkpoint_store,
@@ -223,6 +237,7 @@ def _build_tool_registry(
     workdir: Path | None = None,
     *,
     enabled_tools: tuple[str, ...] = ("read",),
+    subagent_runner: SubagentRunner | None = None,
 ) -> ToolRegistry:
     resolved_workdir = Path.cwd().resolve() if workdir is None else workdir.resolve()
     registry = ToolRegistry()
@@ -232,6 +247,8 @@ def _build_tool_registry(
         "read": ReadTool(root=resolved_workdir),
         "write": WriteTool(root=resolved_workdir),
     }
+    if subagent_runner is not None:
+        available_tools["explore"] = ExplorerSubagentTool(runner=subagent_runner)
     for name in enabled_tools:
         registry.register(available_tools[name])
     return registry

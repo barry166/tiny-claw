@@ -218,6 +218,7 @@ class ToolExecutor:
     ) -> Message:
         translator = ToolErrorTranslator(visible_tools=self._visible_tool_names())
         key = tool_call_key(tool_call)
+        log_context = _tool_log_context(session)
         current_failures = self._failure_count(key)
         if current_failures + 1 >= self.repeat_failure_block_attempt:
             attempt_count = current_failures + 1
@@ -252,8 +253,14 @@ class ToolExecutor:
                 attempt_count=attempt_count,
                 retryable=translation.retryable,
                 suggested_tool=translation.suggested_tool,
+                context=log_context,
             )
-            log_view.log_tool_result(logger, name=tool_call.name, output=output)
+            log_view.log_tool_result(
+                logger,
+                name=tool_call.name,
+                output=output,
+                context=log_context,
+            )
             return Message(
                 role=message.role,
                 content=message.content,
@@ -264,7 +271,7 @@ class ToolExecutor:
             )
 
         try:
-            log_view.log_tool_call(logger, tool_call)
+            log_view.log_tool_call(logger, tool_call, context=log_context)
             execution = self.tools.execute(
                 ToolExecutionContext(
                     tool_call_id=tool_call.id,
@@ -281,7 +288,12 @@ class ToolExecutor:
             if execution.output is None:
                 raise ToolError(f"{tool_call.name} middleware returned no tool output")
             output = execution.output
-            log_view.log_tool_result(logger, name=tool_call.name, output=output)
+            log_view.log_tool_result(
+                logger,
+                name=tool_call.name,
+                output=output,
+                context=log_context,
+            )
             if output.is_error:
                 if execution.status == "denied":
                     message = self._denied_result(tool_call=tool_call, execution=execution)
@@ -291,6 +303,7 @@ class ToolExecutor:
                         tool_call=tool_call,
                         raw_error=output.content,
                         failure_key=key,
+                        log_context=log_context,
                     )
             else:
                 self._clear_failure(key)
@@ -301,12 +314,18 @@ class ToolExecutor:
                     is_error=False,
                 ).to_message()
         except ToolError as exc:
-            log_view.log_tool_exception(logger, name=tool_call.name, error=str(exc))
+            log_view.log_tool_exception(
+                logger,
+                name=tool_call.name,
+                error=str(exc),
+                context=log_context,
+            )
             message = self._error_result(
                 translator=translator,
                 tool_call=tool_call,
                 raw_error=str(exc),
                 failure_key=key,
+                log_context=log_context,
             )
         return message
 
@@ -383,6 +402,7 @@ class ToolExecutor:
         tool_call: ToolCall,
         raw_error: str,
         failure_key: str,
+        log_context: str | None,
     ) -> Message:
         attempt_count = self._record_failure(failure_key)
         translation = translator.translate(
@@ -401,8 +421,14 @@ class ToolExecutor:
             attempt_count=attempt_count,
             retryable=translation.retryable,
             suggested_tool=translation.suggested_tool,
+            context=log_context,
         )
-        log_view.log_tool_result(logger, name=tool_call.name, output=output)
+        log_view.log_tool_result(
+            logger,
+            name=tool_call.name,
+            output=output,
+            context=log_context,
+        )
         message = ToolCallResult(
             tool_call_id=tool_call.id,
             name=tool_call.name,
@@ -448,6 +474,12 @@ def _default_session() -> SessionRef:
         workdir=cwd,
         display_name="default",
     )
+
+
+def _tool_log_context(session: SessionRef) -> str | None:
+    if session.source != "subagent":
+        return None
+    return f"subagent_session={session.key}"
 
 
 def _metadata_for_index(

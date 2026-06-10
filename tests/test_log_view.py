@@ -36,6 +36,21 @@ def test_log_tool_call_renders_readable_block(caplog) -> None:
     assert '"command": "node -v"' in caplog.text
 
 
+def test_log_tool_call_can_render_context(caplog) -> None:
+    call = ToolCall(id="call-1", name="read", arguments={"path": "README.md"})
+
+    with caplog.at_level(logging.INFO):
+        log_view.log_tool_call(
+            logging.getLogger("test-log-view"),
+            call,
+            context="subagent_session=child-123",
+        )
+
+    assert "执行工具" in caplog.text
+    assert "read" in caplog.text
+    assert "subagent_session=child-123" in caplog.text
+
+
 def test_log_tool_result_renders_success_block(caplog) -> None:
     output = ToolOutput(content="stdout:\nHello, tiny-claw!")
 

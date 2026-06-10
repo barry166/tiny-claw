@@ -44,9 +44,9 @@ def test_settings_uses_internal_context_compactor_defaults() -> None:
 
 
 def test_settings_reads_enabled_tools_from_environment() -> None:
-    settings = Settings.from_env({"TINY_CLAW_ENABLED_TOOLS": "read,write,bash,edit,read"})
+    settings = Settings.from_env({"TINY_CLAW_ENABLED_TOOLS": "read,write,bash,edit,explore,read"})
 
-    assert settings.enabled_tools == ("bash", "edit", "read", "write")
+    assert settings.enabled_tools == ("bash", "edit", "explore", "read", "write")
 
 
 def test_settings_reads_runtime_tool_policy_and_approval_configuration() -> None:

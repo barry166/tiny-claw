@@ -3,15 +3,21 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Protocol
 
 from tiny_claw._internal.schema.message import ToolDefinition
+from tiny_claw._internal.session import SessionRef
 
 
 @dataclass(frozen=True)
 class ToolInput:
     arguments: Mapping[str, Any]
+    session: SessionRef | None = None
+    workdir: Path | None = None
+    visible_tool_names: tuple[str, ...] = ()
+    metadata: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

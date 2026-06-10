@@ -40,7 +40,15 @@ class ToolRegistry:
 
     def execute(self, ctx: ToolExecutionContext) -> ToolExecutionResult:
         def terminal(current: ToolExecutionContext) -> ToolExecutionResult:
-            output = self.get(current.tool_name).run(ToolInput(arguments=current.arguments))
+            output = self.get(current.tool_name).run(
+                ToolInput(
+                    arguments=current.arguments,
+                    session=current.session,
+                    workdir=current.workdir,
+                    visible_tool_names=current.visible_tool_names,
+                    metadata=current.metadata,
+                )
+            )
             return ToolExecutionResult.completed(output)
 
         next_step: ToolNext = terminal

@@ -155,10 +155,10 @@ def test_application_registers_explicitly_enabled_tools(tmp_path) -> None:
         {
             "OPENAI_KEY": "key",
             "TINY_CLAW_STATE_DIR": str(tmp_path),
-            "TINY_CLAW_ENABLED_TOOLS": "read,write,bash,edit",
+            "TINY_CLAW_ENABLED_TOOLS": "read,write,bash,edit,explore",
         }
     )
 
     app = build_application(settings)
 
-    assert app.health().tools == ("bash", "edit", "read", "write")
+    assert app.health().tools == ("bash", "edit", "explore", "read", "write")

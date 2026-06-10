@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Mapping
 from threading import Barrier
@@ -10,6 +11,7 @@ import pytest
 from tiny_claw._internal.engine.tool_executor import ToolExecutor
 from tiny_claw._internal.errors import ToolError
 from tiny_claw._internal.schema.message import Role, ToolCall, ToolDefinition
+from tiny_claw._internal.session import SessionRef
 from tiny_claw._internal.tools.base import ToolInput, ToolOutput
 from tiny_claw._internal.tools.builtin.read import ReadTool
 from tiny_claw._internal.tools.builtin.write import WriteTool
@@ -150,6 +152,31 @@ def test_tool_executor_runs_consecutive_reads_concurrently() -> None:
 
     assert elapsed < 0.5
     assert [message.content for message in observations] == ["read:a.txt", "read:b.txt"]
+
+
+def test_tool_executor_marks_subagent_tool_logs(caplog, tmp_path) -> None:
+    (tmp_path / "README.md").write_text("tiny claw\n", encoding="utf-8")
+    registry = ToolRegistry()
+    registry.register(ReadTool(root=tmp_path))
+    executor = ToolExecutor(tools=registry)
+    child_session = SessionRef(
+        key="parent-cli-test-explore-child",
+        source="subagent",
+        external_id="cli-test:explore:child",
+        workdir=tmp_path,
+        display_name="explore:test:child",
+    )
+
+    with caplog.at_level(logging.INFO, logger="tiny_claw._internal.engine.tool_executor"):
+        executor.run_tool_calls(
+            (ToolCall(id="call-read", name="read", arguments={"path": "README.md"}),),
+            session=child_session,
+            workdir=tmp_path,
+        )
+
+    assert "subagent_session=parent-cli-test-explore-child" in caplog.text
+    assert "执行工具" in caplog.text
+    assert "工具成功" in caplog.text
 
 
 def test_tool_executor_preserves_original_order_for_parallel_reads() -> None:
