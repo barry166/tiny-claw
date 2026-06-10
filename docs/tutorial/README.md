@@ -26,5 +26,11 @@
 | `20-飞书审批-adapter.md` | 把飞书接成审批 Adapter，而不是工具 | Feishu 审批 Adapter | 外部集成维护者 / Agent 平台开发者 |
 | `21-审批流程测试与验证.md` | 如何测试高危工具审批流程 | 审批流程测试 | 测试工程师 / 项目使用者 |
 | `22-mainloop-审批恢复重构.md` | 拆分 MainLoop 中的审批恢复职责 | MainLoop 审批恢复重构 | 后续维护者 / Agent 主循环开发者 |
+| `23-explorer-subagent-runtime.md` | 为 AI Agent 设计一个只读 Explorer Subagent | Explorer Subagent 只读探索运行器 | AI Agent 框架开发者 / 后续维护者 |
+| `24-explore-tool-adapter.md` | 把 Subagent 封装成一个普通 Tool：`explore` 的接入设计 | `explore` 工具适配与工具系统接入 | 工具系统维护者 / Python CLI 开发者 |
+| `25-subagent-session-memory-isolation.md` | AI Agent 的子会话隔离：让探索结果回流而不是上下文泄洪 | 子 Session 与 Memory 隔离 | AI Agent 框架开发者 / 后续维护者 |
+| `26-subagent-observability.md` | 给 Subagent 加上可读日志：从启动、结束到 child tool 标记 | Subagent 日志与可观测性增强 | 后续维护者 / 测试工程师 |
+| `27-openai-subagent-live-test.md` | 如何为 AI Agent Subagent 写一个真实 OpenAI E2E 测试 | OpenAI Live E2E 测试用例 | 测试工程师 / AI Agent 框架开发者 |
+| `28-tool-concurrency-boundaries.md` | Tiny Claw 的工具并发模型：为什么 read 可以并发，explore 暂不并发 | 工具并发边界分析 | 架构设计读者 / 后续维护者 |
 
 > 说明：这些教程按当前代码库中的已实现模块组织。发布到具体版本文档时，应以对应版本的代码和测试结果为准。
