@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import time
 from collections.abc import Mapping
@@ -16,6 +17,7 @@ from tiny_claw._internal.tools.base import ToolInput, ToolOutput
 from tiny_claw._internal.tools.builtin.read import ReadTool
 from tiny_claw._internal.tools.builtin.write import WriteTool
 from tiny_claw._internal.tools.registry import ToolRegistry
+from tiny_claw._internal.tracing import FileTraceRecorder, Tracer
 
 
 class SlowReadTool:
@@ -193,6 +195,87 @@ def test_tool_executor_preserves_original_order_for_parallel_reads() -> None:
 
     assert [message.tool_call_id for message in observations] == ["call-a", "call-b"]
     assert [message.content for message in observations] == ["read:a.txt", "read:b.txt"]
+
+
+def test_tool_executor_traces_parallel_reads_under_current_step(tmp_path) -> None:
+    registry = ToolRegistry()
+    registry.register(SlowReadTool(delays={"a.txt": 0.05, "b.txt": 0}))
+    tracer = Tracer(recorder=FileTraceRecorder(tmp_path), capture_mode="metadata")
+    executor = ToolExecutor(tools=registry, tracer=tracer)
+
+    with (
+        tracer.start_trace(
+            trace_id="trace-1",
+            session_key="session-1",
+            session_source="test",
+            kind="agent.run",
+            name="tiny_claw.run",
+        ),
+        tracer.start_span(kind="agent.step", name="step.1"),
+    ):
+        executor.run_tool_calls(
+            (
+                ToolCall(id="call-a", name="read", arguments={"path": "a.txt"}),
+                ToolCall(id="call-b", name="read", arguments={"path": "b.txt"}),
+            )
+        )
+
+    payload = json.loads(
+        (tmp_path / "sessions" / "session-1" / "traces" / "trace-1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    step = payload["root"]["children"][0]
+    assert step["kind"] == "agent.step"
+    tool_spans = step["children"]
+    assert [span["kind"] for span in tool_spans] == ["tool.call", "tool.call"]
+    assert [span["attributes"]["tool_call_id"] for span in tool_spans] == ["call-a", "call-b"]
+    assert [span["attributes"]["tool_call_index"] for span in tool_spans] == [0, 1]
+    assert all(span["parent_id"] == step["span_id"] for span in tool_spans)
+
+
+def test_tool_executor_traces_parallel_read_indexes_across_ordered_barriers(tmp_path) -> None:
+    registry = ToolRegistry()
+    registry.register(SlowReadTool(delays={"a.txt": 0.05, "b.txt": 0}))
+    registry.register(RecordingTool(name="write", events=[]))
+    tracer = Tracer(recorder=FileTraceRecorder(tmp_path), capture_mode="metadata")
+    executor = ToolExecutor(tools=registry, tracer=tracer)
+
+    with (
+        tracer.start_trace(
+            trace_id="trace-1",
+            session_key="session-1",
+            session_source="test",
+            kind="agent.run",
+            name="tiny_claw.run",
+        ),
+        tracer.start_span(kind="agent.step", name="step.1"),
+    ):
+        executor.run_tool_calls(
+            (
+                ToolCall(id="call-a", name="read", arguments={"path": "a.txt"}),
+                ToolCall(
+                    id="call-write",
+                    name="write",
+                    arguments={"path": "notes.txt", "content": "new"},
+                ),
+                ToolCall(id="call-b", name="read", arguments={"path": "b.txt"}),
+            )
+        )
+
+    payload = json.loads(
+        (tmp_path / "sessions" / "session-1" / "traces" / "trace-1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    tool_spans = payload["root"]["children"][0]["children"]
+
+    assert [span["attributes"]["tool_call_id"] for span in tool_spans] == [
+        "call-a",
+        "call-write",
+        "call-b",
+    ]
+    assert [span["attributes"]["tool_call_index"] for span in tool_spans] == [0, 1, 2]
 
 
 def test_tool_executor_uses_non_read_tools_as_ordered_barriers() -> None:

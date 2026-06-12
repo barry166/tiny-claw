@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from functools import partial
@@ -23,6 +24,7 @@ from tiny_claw._internal.tools.middleware import (
     ToolSuspension,
 )
 from tiny_claw._internal.tools.registry import ToolRegistry
+from tiny_claw._internal.tracing import NullTracer, Tracer, elapsed_ms
 
 PARALLEL_SAFE_TOOL_NAMES = {"read"}
 REPEAT_FAILURE_BLOCK_ATTEMPT = 3
@@ -40,6 +42,7 @@ class ToolRunBatch:
 @dataclass(frozen=True)
 class ToolExecutor:
     tools: ToolRegistry
+    tracer: Tracer = field(default_factory=NullTracer)
     max_parallel_tools: int = 4
     visible_tool_names: tuple[str, ...] | None = None
     repeat_failure_block_attempt: int = REPEAT_FAILURE_BLOCK_ATTEMPT
@@ -82,11 +85,11 @@ class ToolExecutor:
         resolved_session = session or _default_session()
         resolved_workdir = Path.cwd().resolve() if workdir is None else workdir.resolve()
         observations: list[Message] = []
-        parallel_group: list[ToolCall] = []
+        parallel_group: list[tuple[int, ToolCall]] = []
 
         for index, tool_call in enumerate(tool_calls):
             if self._is_parallel_safe(tool_call):
-                parallel_group.append(tool_call)
+                parallel_group.append((index, tool_call))
                 continue
 
             observations.extend(
@@ -95,6 +98,7 @@ class ToolExecutor:
                     channel=resolved_channel,
                     session=resolved_session,
                     workdir=resolved_workdir,
+                    context_metadata=context_metadata,
                 )
             )
             parallel_group.clear()
@@ -119,48 +123,54 @@ class ToolExecutor:
                 channel=resolved_channel,
                 session=resolved_session,
                 workdir=resolved_workdir,
+                context_metadata=context_metadata,
             )
         )
         return ToolRunBatch(observations=tuple(observations))
 
     def _run_parallel_group(
         self,
-        tool_calls: tuple[ToolCall, ...],
+        indexed_tool_calls: tuple[tuple[int, ToolCall], ...],
         *,
         channel: Channel,
         session: SessionRef,
         workdir: Path,
+        context_metadata: dict[str, Any] | None,
     ) -> tuple[Message, ...]:
-        if not tool_calls:
+        if not indexed_tool_calls:
             return ()
-        if len(tool_calls) == 1 or self.max_parallel_tools == 1:
+        if len(indexed_tool_calls) == 1 or self.max_parallel_tools == 1:
             return tuple(
                 self._run_one(
                     tool_call,
                     channel=channel,
                     session=session,
                     workdir=workdir,
-                    metadata=None,
+                    metadata=_metadata_for_index(context_metadata, index),
                 )
-                for tool_call in tool_calls
+                for index, tool_call in indexed_tool_calls
             )
 
-        for tool_call in tool_calls:
+        for _, tool_call in indexed_tool_calls:
             notify_channel(partial(channel.on_tool_call, tool_call))
-        max_workers = min(self.max_parallel_tools, len(tool_calls))
+        max_workers = min(self.max_parallel_tools, len(indexed_tool_calls))
+        trace_state = self.tracer.current_state()
+        trace_parent_span_id = self.tracer.current_span_id()
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             observations = tuple(
                 executor.map(
-                    lambda call: self._execute_one(
-                        call,
+                    lambda indexed_call: self._execute_one(
+                        indexed_call[1],
                         session=session,
                         workdir=workdir,
-                        metadata=None,
+                        metadata=_metadata_for_index(context_metadata, indexed_call[0]),
+                        trace_state=trace_state,
+                        trace_parent_span_id=trace_parent_span_id,
                     ),
-                    tool_calls,
+                    indexed_tool_calls,
                 )
             )
-        for tool_call, observation in zip(tool_calls, observations, strict=True):
+        for (_, tool_call), observation in zip(indexed_tool_calls, observations, strict=True):
             notify_channel(partial(channel.on_tool_result, call=tool_call, result=observation))
         return observations
 
@@ -196,6 +206,8 @@ class ToolExecutor:
             session=session,
             workdir=workdir,
             metadata=metadata,
+            trace_state=None,
+            trace_parent_span_id=None,
         )
         notify_channel(partial(channel.on_tool_result, call=tool_call, result=observation))
         if observation.metadata.get("suspended") is True:
@@ -209,6 +221,93 @@ class ToolExecutor:
         return ToolRunBatch(observations=(observation,))
 
     def _execute_one(
+        self,
+        tool_call: ToolCall,
+        *,
+        session: SessionRef,
+        workdir: Path,
+        metadata: dict[str, Any] | None,
+        trace_state: Any | None = None,
+        trace_parent_span_id: str | None = None,
+    ) -> Message:
+        started = time.perf_counter()
+        attributes = {
+            "tool_call_id": tool_call.id,
+            "tool_name": tool_call.name,
+            "session_key": session.key,
+            "session_source": session.source,
+        }
+        if metadata and isinstance(metadata.get("tool_call_index"), int):
+            attributes["tool_call_index"] = metadata["tool_call_index"]
+        attributes.update(self.tracer.payload_attributes("tool_arguments", tool_call.arguments))
+        span = self.tracer.begin_span(
+            kind="tool.call",
+            name=f"tool.{tool_call.name}",
+            attributes=attributes,
+            parent_span_id=trace_parent_span_id,
+            state=trace_state,
+        )
+        try:
+            message = self._execute_one_untraced(
+                tool_call,
+                session=session,
+                workdir=workdir,
+                metadata=metadata,
+            )
+        except Exception as exc:
+            self.tracer.end_span(
+                span,
+                status="error",
+                attributes={
+                    "latency_ms": elapsed_ms(started),
+                    "error_type": type(exc).__name__,
+                },
+            )
+            raise
+
+        is_error = message.metadata.get("is_error") is True
+        end_attributes: dict[str, Any] = {
+            "latency_ms": elapsed_ms(started),
+            "is_error": is_error,
+            "result_chars": len(message.content),
+        }
+        for key in (
+            "approval_id",
+            "checkpoint_id",
+            "denied",
+            "doom_loop_detected",
+            "error_type",
+            "retryable",
+            "suspended",
+            "suggested_tool",
+        ):
+            value = message.metadata.get(key)
+            if value is not None:
+                end_attributes[key] = value
+        end_attributes.update(self.tracer.payload_attributes("tool_observation", message.content))
+        if message.metadata.get("suspended") is True:
+            pause_span = self.tracer.begin_span(
+                kind="approval.pause",
+                name="approval.pause",
+                attributes={
+                    "approval_id": message.metadata.get("approval_id"),
+                    "checkpoint_id": message.metadata.get("checkpoint_id"),
+                    "tool_call_id": tool_call.id,
+                    "tool_name": tool_call.name,
+                    "reason": message.metadata.get("error_type"),
+                },
+                parent_span_id=span.span_id,
+                state=span.state,
+            )
+            self.tracer.end_span(pause_span)
+        self.tracer.end_span(
+            span,
+            status="error" if is_error else "ok",
+            attributes=end_attributes,
+        )
+        return message
+
+    def _execute_one_untraced(
         self,
         tool_call: ToolCall,
         *,
@@ -485,9 +584,7 @@ def _tool_log_context(session: SessionRef) -> str | None:
 def _metadata_for_index(
     context_metadata: dict[str, Any] | None,
     index: int,
-) -> dict[str, Any] | None:
-    if context_metadata is None:
-        return None
-    metadata = dict(context_metadata)
+) -> dict[str, Any]:
+    metadata = dict(context_metadata or {})
     metadata["tool_call_index"] = index
     return metadata

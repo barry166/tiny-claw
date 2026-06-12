@@ -128,6 +128,36 @@ def test_application_records_usage_jsonl_without_message_content(tmp_path) -> No
     assert "assistant secret output" not in serialized
 
 
+def test_application_records_trace_json_without_message_content_by_default(tmp_path) -> None:
+    class TraceProvider(FakeProvider):
+        @property
+        def name(self) -> str:
+            return "trace-provider"
+
+        def complete(self, request: LLMRequest) -> LLMResponse:
+            self.requests.append(request)
+            return LLMResponse(
+                message=Message.assistant(content="assistant secret output"),
+                provider=self.name,
+                model="trace-model",
+            )
+
+    settings = Settings.from_env({"TINY_CLAW_STATE_DIR": str(tmp_path)})
+    app = build_application(settings, provider=TraceProvider())
+
+    result = app.run(prompt="hello secret prompt", max_steps=1)
+
+    assert result.trace_id is not None
+    assert result.trace_path is not None
+    payload = json.loads(result.trace_path.read_text(encoding="utf-8"))
+    assert payload["root"]["kind"] == "agent.run"
+    assert payload["root"]["children"][0]["kind"] == "agent.step"
+    assert payload["root"]["children"][0]["children"][0]["kind"] == "llm.call"
+    serialized = json.dumps(payload)
+    assert "hello secret prompt" not in serialized
+    assert "assistant secret output" not in serialized
+
+
 def test_application_isolates_named_cli_sessions(tmp_path) -> None:
     settings = Settings.from_env({"TINY_CLAW_STATE_DIR": str(tmp_path)})
     app = build_application(settings, provider=FakeProvider())

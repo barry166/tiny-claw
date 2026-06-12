@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 
@@ -156,6 +157,16 @@ def test_parent_loop_receives_only_compact_subagent_observation(tmp_path) -> Non
     assert "subagent evidence" in parent_observation.content
     assert "call-child-read" not in parent_observation.content
     assert provider.requests[1].tools == (ReadTool(root=tmp_path).definition(),)
+    assert result.trace_path is not None
+    payload = json.loads(result.trace_path.read_text(encoding="utf-8"))
+    first_step = payload["root"]["children"][0]
+    explore_span = first_step["children"][1]
+    assert explore_span["kind"] == "tool.call"
+    assert explore_span["attributes"]["tool_name"] == "explore"
+    subagent_span = explore_span["children"][0]
+    assert subagent_span["kind"] == "subagent.run"
+    assert subagent_span["attributes"]["child_session_source"] == "subagent"
+    assert any(child["kind"] == "llm.call" for child in subagent_span["children"])
 
 
 def test_subagent_memory_is_isolated_from_parent_session(tmp_path) -> None:

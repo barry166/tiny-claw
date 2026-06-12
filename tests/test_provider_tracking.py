@@ -21,6 +21,7 @@ from tiny_claw._internal.provider.tracking import (
     run_summary,
 )
 from tiny_claw._internal.schema.message import Message, ToolCall
+from tiny_claw._internal.tracing import FileTraceRecorder, Tracer
 
 
 class RecordingProvider:
@@ -151,6 +152,37 @@ def test_usage_tracking_provider_records_failure_and_reraises() -> None:
     assert summary is not None
     assert summary.input_tokens == 0
     assert summary.output_tokens == 0
+
+
+def test_usage_tracking_provider_records_error_span(tmp_path) -> None:
+    tracer = Tracer(recorder=FileTraceRecorder(tmp_path), capture_mode="metadata")
+    provider = UsageTrackingProvider(
+        inner=FailingProvider(),
+        recorder=RecordingUsageRecorder(events=[]),
+        tracer=tracer,
+    )
+
+    with (
+        pytest.raises(ProviderError, match="boom"),
+        tracer.start_trace(
+            trace_id="trace-1",
+            session_key="session-1",
+            session_source="test",
+            kind="agent.run",
+            name="tiny_claw.run",
+        ),
+    ):
+        provider.complete(LLMRequest(messages=(Message.user("hello"),)))
+
+    payload = json.loads(
+        (tmp_path / "sessions" / "session-1" / "traces" / "trace-1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    span = payload["root"]["children"][0]
+    assert span["kind"] == "llm.call"
+    assert span["status"] == "error"
+    assert span["attributes"]["error_type"] == "ProviderError"
 
 
 def test_usage_tracking_provider_ignores_recorder_failure() -> None:

@@ -56,6 +56,7 @@ from tiny_claw._internal.provider.tracking import (
 from tiny_claw._internal.schema.message import Message, ToolCall, ToolCallResult, ToolDefinition
 from tiny_claw._internal.session import SessionMemoryStore, SessionRef
 from tiny_claw._internal.tools.registry import ToolRegistry
+from tiny_claw._internal.tracing import NullTracer, SpanHandle, Tracer
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +77,7 @@ ReturnResult = Callable[
         str | None,
         str | None,
         str | None,
+        SpanHandle | None,
     ],
     RunResult,
 ]
@@ -98,6 +100,7 @@ RecordAndReturnResult = Callable[
         str | None,
         str | None,
         str | None,
+        SpanHandle | None,
     ],
     RunResult,
 ]
@@ -112,6 +115,7 @@ class ApprovalResumeRunner:
     checkpoint_store: FileRunCheckpointStore | None
     return_result: ReturnResult
     record_and_return_result: RecordAndReturnResult
+    tracer: Tracer = NullTracer()
 
     def resume_approved(
         self,
@@ -137,8 +141,16 @@ class ApprovalResumeRunner:
                 channel=resolved_channel,
             )
 
+        run_id = uuid.uuid4().hex
+        trace_root = self._begin_resume_trace(
+            run_id=run_id,
+            session=session,
+            approval=approval,
+            action="approve",
+        )
         tool_executor = ToolExecutor(
             tools=self.tools,
+            tracer=self.tracer,
             visible_tool_names=checkpoint.visible_tool_names,
         )
         batch = tool_executor.run_tool_batch(
@@ -167,7 +179,8 @@ class ApprovalResumeRunner:
                 resolved_channel,
                 batch.suspension.approval_id if batch.suspension is not None else None,
                 batch.suspension.checkpoint_id if batch.suspension is not None else None,
-                None,
+                run_id,
+                trace_root,
             )
 
         return self._continue_from_checkpoint(
@@ -175,6 +188,8 @@ class ApprovalResumeRunner:
             initial_observations=batch.observations,
             session=session,
             channel=resolved_channel,
+            run_id=run_id,
+            trace_root=trace_root,
         )
 
     def resume_rejected(
@@ -193,6 +208,13 @@ class ApprovalResumeRunner:
                 channel=resolved_channel,
             )
 
+        run_id = uuid.uuid4().hex
+        trace_root = self._begin_resume_trace(
+            run_id=run_id,
+            session=session,
+            approval=approval,
+            action="reject",
+        )
         observation = Message.tool_result(
             ToolCallResult(
                 tool_call_id=approval.tool_call_id,
@@ -221,6 +243,8 @@ class ApprovalResumeRunner:
             initial_observations=(rejected_observation,),
             session=session,
             channel=resolved_channel,
+            run_id=run_id,
+            trace_root=trace_root,
         )
 
     def preserve_prior_observations_for_suspension(
@@ -267,6 +291,8 @@ class ApprovalResumeRunner:
         initial_observations: tuple[Message, ...],
         session: SessionRef,
         channel: Channel,
+        run_id: str,
+        trace_root: SpanHandle,
     ) -> RunResult:
         session_memory = self.memory.for_session(session)
         plan_files = PlanFiles.from_session_root(session_memory.root)
@@ -296,18 +322,30 @@ class ApprovalResumeRunner:
         )
         tool_executor = ToolExecutor(
             tools=self.tools,
+            tracer=self.tracer,
             visible_tool_names=checkpoint.visible_tool_names,
         )
         last_text = _last_message_text(messages)
         last_provider = checkpoint.provider
         tool_policy = ToolPolicy(checkpoint.tool_policy)
-        run_id = uuid.uuid4().hex
 
         for step in range(checkpoint.step + 1, checkpoint.max_steps + 1):
             phase = phase_for_step(mode=mode, step=step, plan_required=plan_required)
             tool_policy = tool_policy_for_phase(phase)
             request_tool_definitions = (
                 registered_tool_definitions if tool_policy is ToolPolicy.AUTO else ()
+            )
+            step_span = self.tracer.begin_span(
+                kind="agent.step",
+                name=f"step.{step}",
+                attributes={
+                    "step": step,
+                    "phase": phase,
+                    "mode": mode.value,
+                    "tool_policy": tool_policy.value,
+                    "visible_tools": len(request_tool_definitions),
+                    "resume_from_checkpoint_id": checkpoint.id,
+                },
             )
             log_view.log_turn_start(logger, step=step, max_steps=checkpoint.max_steps, phase=phase)
             _notify_thinking(
@@ -333,6 +371,17 @@ class ApprovalResumeRunner:
                     truncated_tool_results=compaction.truncated_tool_results,
                     still_over_budget=compaction.still_over_budget,
                 )
+                step_span.record_event(
+                    "context.compacted",
+                    {
+                        "original_chars": compaction.original_chars,
+                        "compacted_chars": compaction.compacted_chars,
+                        "max_chars": compaction.max_chars,
+                        "masked_tool_results": compaction.masked_tool_results,
+                        "truncated_tool_results": compaction.truncated_tool_results,
+                        "still_over_budget": compaction.still_over_budget,
+                    },
+                )
             response = self._complete_provider(
                 messages=compaction.messages,
                 tools=request_tool_definitions,
@@ -347,6 +396,13 @@ class ApprovalResumeRunner:
             messages.append(response.message)
             last_text = response.text
             last_provider = response.provider
+            step_span.set_attributes(
+                {
+                    "provider": response.provider,
+                    "tool_calls": len(response.message.tool_calls),
+                    "assistant_text_chars": len(response.text),
+                }
+            )
 
             log_view.log_model_response(
                 logger,
@@ -370,6 +426,7 @@ class ApprovalResumeRunner:
                                     PlanPromptBuilder.execute_current_task_prompt(snapshot)
                                 )
                             )
+                            self.tracer.end_span(step_span)
                             continue
                     elif status in {"blocked", "completed"}:
                         snapshot = plan_files.append_blocker(
@@ -394,6 +451,7 @@ class ApprovalResumeRunner:
                     None,
                     None,
                     run_id,
+                    trace_root,
                 )
 
             if tool_policy is ToolPolicy.NONE:
@@ -414,6 +472,7 @@ class ApprovalResumeRunner:
                     None,
                     None,
                     run_id,
+                    trace_root,
                 )
 
             draft = RunCheckpointDraft(
@@ -468,9 +527,11 @@ class ApprovalResumeRunner:
                     batch.suspension.approval_id if batch.suspension is not None else None,
                     batch.suspension.checkpoint_id if batch.suspension is not None else None,
                     run_id,
+                    trace_root,
                 )
             if append_tool_observations(messages, batch.observations):
                 current_step_had_tool_error = True
+            self.tracer.end_span(step_span)
 
         return self.record_and_return_result(
             session_memory,
@@ -489,6 +550,7 @@ class ApprovalResumeRunner:
             None,
             None,
             run_id,
+            trace_root,
         )
 
     def _complete_provider(
@@ -527,6 +589,15 @@ class ApprovalResumeRunner:
                 )
             except Exception:
                 clear_run_summary(run_id)
+                self.tracer.end_trace(
+                    status="error",
+                    attributes={
+                        "run_id": run_id,
+                        "mode": mode,
+                        "phase": phase,
+                        "step": step,
+                    },
+                )
                 raise
 
     def _read_resume_checkpoint(
@@ -572,7 +643,50 @@ class ApprovalResumeRunner:
             None,
             None,
             None,
+            None,
         )
+
+    def _begin_resume_trace(
+        self,
+        *,
+        run_id: str,
+        session: SessionRef,
+        approval: ApprovalRecord,
+        action: str,
+    ) -> SpanHandle:
+        root = self.tracer.begin_trace(
+            trace_id=run_id,
+            session_key=session.key,
+            session_source=session.source,
+            kind="agent.run",
+            name="tiny_claw.approval_resume",
+            attributes={
+                "run_id": run_id,
+                "session_key": session.key,
+                "session_source": session.source,
+                "session_display_name": session.display_name,
+                "mode": "approval_resume",
+                "approval_id": approval.id,
+                "checkpoint_id": approval.checkpoint_id,
+                "approval_action": action,
+                "tool_call_id": approval.tool_call_id,
+                "tool_name": approval.tool_name,
+                "workdir": str(session.workdir),
+            },
+        )
+        resume_span = self.tracer.begin_span(
+            kind="approval.resume",
+            name=f"approval.{action}",
+            attributes={
+                "approval_id": approval.id,
+                "checkpoint_id": approval.checkpoint_id,
+                "approval_action": action,
+                "tool_call_id": approval.tool_call_id,
+                "tool_name": approval.tool_name,
+            },
+        )
+        self.tracer.end_span(resume_span)
+        return root
 
 
 def _pending_tool_call(checkpoint: RunCheckpoint) -> ToolCall | None:

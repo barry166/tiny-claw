@@ -27,6 +27,9 @@ DEFAULT_CONTEXT_RECENT_TOOL_RESULT_HEAD_CHARS = 2_000
 DEFAULT_CONTEXT_RECENT_TOOL_RESULT_TAIL_CHARS = 2_000
 DEFAULT_APPROVAL_REQUIRED_TOOLS = ("bash", "edit", "write")
 APPROVAL_PROVIDERS = {"off", "feishu"}
+TRACE_MODES = {"off", "metadata", "replay"}
+DEFAULT_TRACE_MODE = "metadata"
+DEFAULT_TRACE_MAX_PAYLOAD_CHARS = 4_000
 
 
 @dataclass(frozen=True)
@@ -58,6 +61,8 @@ class Settings:
     approval_required_tools: tuple[str, ...] = DEFAULT_APPROVAL_REQUIRED_TOOLS
     approval_provider: str = "off"
     approval_timeout_seconds: int = 3600
+    trace_mode: str = DEFAULT_TRACE_MODE
+    trace_max_payload_chars: int = DEFAULT_TRACE_MAX_PAYLOAD_CHARS
 
     @classmethod
     def from_env(
@@ -80,6 +85,12 @@ class Settings:
             raise ConfigurationError(
                 "Invalid TINY_CLAW_APPROVAL_PROVIDER "
                 f"{approval_provider!r}; expected one of: {', '.join(sorted(APPROVAL_PROVIDERS))}"
+            )
+        trace_mode = env.get("TINY_CLAW_TRACE_MODE", DEFAULT_TRACE_MODE).strip().lower()
+        if trace_mode not in TRACE_MODES:
+            raise ConfigurationError(
+                "Invalid TINY_CLAW_TRACE_MODE "
+                f"{trace_mode!r}; expected one of: {', '.join(sorted(TRACE_MODES))}"
             )
 
         return cls(
@@ -124,6 +135,11 @@ class Settings:
             approval_timeout_seconds=_positive_int_env(
                 env.get("TINY_CLAW_APPROVAL_TIMEOUT_SECONDS"),
                 3600,
+            ),
+            trace_mode=trace_mode,
+            trace_max_payload_chars=_positive_int_env(
+                env.get("TINY_CLAW_TRACE_MAX_PAYLOAD_CHARS"),
+                DEFAULT_TRACE_MAX_PAYLOAD_CHARS,
             ),
         )
 

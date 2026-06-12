@@ -6,6 +6,7 @@ import logging
 import uuid
 from dataclasses import dataclass
 from functools import partial
+from pathlib import Path
 
 from tiny_claw._internal.approval import (
     CHECKPOINT_DRAFT_METADATA_KEY,
@@ -61,6 +62,7 @@ from tiny_claw._internal.provider.tracking import (
 from tiny_claw._internal.schema.message import Message, ToolDefinition
 from tiny_claw._internal.session import SessionMemoryStore, SessionRef
 from tiny_claw._internal.tools.registry import ToolRegistry
+from tiny_claw._internal.tracing import NullTracer, SpanHandle, Tracer
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +87,7 @@ class MainLoop:
     memory: SessionMemoryStore
     tools: ToolRegistry
     checkpoint_store: FileRunCheckpointStore | None = None
+    tracer: Tracer = NullTracer()
 
     @property
     def provider_name(self) -> str:
@@ -103,6 +106,22 @@ class MainLoop:
             raise ValueError("max_steps must be greater than or equal to 1")
 
         run_id = uuid.uuid4().hex
+        trace_root = self.tracer.begin_trace(
+            trace_id=run_id,
+            session_key=session.key,
+            session_source=session.source,
+            kind="agent.run",
+            name="tiny_claw.run",
+            attributes={
+                "run_id": run_id,
+                "session_key": session.key,
+                "session_source": session.source,
+                "session_display_name": session.display_name,
+                "mode": mode.value,
+                "max_steps": max_steps,
+                "workdir": str(session.workdir),
+            },
+        )
         resolved_channel = channel or NullChannel()
         notify_channel(
             partial(
@@ -124,6 +143,7 @@ class MainLoop:
                 plan_files=plan_files,
                 channel=resolved_channel,
                 run_id=run_id,
+                trace_root=trace_root,
             )
         context = self.context_builder.build(
             prompt=prompt,
@@ -141,6 +161,7 @@ class MainLoop:
             )
         tool_executor = ToolExecutor(
             tools=self.tools,
+            tracer=self.tracer,
             visible_tool_names=tuple(definition.name for definition in registered_tool_definitions),
         )
         last_text = ""
@@ -190,6 +211,7 @@ class MainLoop:
                         plan=plan,
                         channel=resolved_channel,
                         run_id=run_id,
+                        trace_root=trace_root,
                     )
                 messages.append(
                     Message.user(PlanPromptBuilder.execute_current_task_prompt(snapshot))
@@ -200,6 +222,18 @@ class MainLoop:
             tool_policy = tool_policy_for_phase(phase)
             request_tool_definitions = (
                 registered_tool_definitions if tool_policy is ToolPolicy.AUTO else ()
+            )
+            step_span = self.tracer.begin_span(
+                kind="agent.step",
+                name=f"step.{step}",
+                attributes={
+                    "step": step,
+                    "phase": phase,
+                    "mode": mode.value,
+                    "tool_policy": tool_policy.value,
+                    "visible_tools": len(request_tool_definitions),
+                    "message_count": len(messages),
+                },
             )
             log_view.log_turn_start(logger, step=step, max_steps=max_steps, phase=phase)
             if mode is RunMode.PLAN_ACT and phase == "plan":
@@ -231,6 +265,17 @@ class MainLoop:
                     truncated_tool_results=compaction.truncated_tool_results,
                     still_over_budget=compaction.still_over_budget,
                 )
+                step_span.record_event(
+                    "context.compacted",
+                    {
+                        "original_chars": compaction.original_chars,
+                        "compacted_chars": compaction.compacted_chars,
+                        "max_chars": compaction.max_chars,
+                        "masked_tool_results": compaction.masked_tool_results,
+                        "truncated_tool_results": compaction.truncated_tool_results,
+                        "still_over_budget": compaction.still_over_budget,
+                    },
+                )
             response = self._complete_provider(
                 messages=compaction.messages,
                 tools=request_tool_definitions,
@@ -246,6 +291,13 @@ class MainLoop:
             last_text = response.text
             last_provider = response.provider
             tool_call_count = len(response.message.tool_calls)
+            step_span.set_attributes(
+                {
+                    "provider": response.provider,
+                    "tool_calls": tool_call_count,
+                    "assistant_text_chars": len(response.text),
+                }
+            )
 
             log_view.log_model_response(
                 logger,
@@ -276,6 +328,7 @@ class MainLoop:
                         plan=plan,
                         channel=resolved_channel,
                         run_id=run_id,
+                        trace_root=trace_root,
                     )
 
                 plan_text, todo_text = PlanResponseParser.parse_create_response(
@@ -315,6 +368,7 @@ class MainLoop:
                         plan=plan,
                         channel=resolved_channel,
                         run_id=run_id,
+                        trace_root=trace_root,
                     )
 
                 messages.append(
@@ -327,6 +381,7 @@ class MainLoop:
                     step + 1,
                     len(registered_tool_definitions),
                 )
+                self.tracer.end_span(step_span)
                 continue
 
             if not response.message.tool_calls:
@@ -343,6 +398,7 @@ class MainLoop:
                                     PlanPromptBuilder.execute_current_task_prompt(snapshot)
                                 )
                             )
+                            self.tracer.end_span(step_span)
                             continue
                     elif status in {"blocked", "completed"}:
                         snapshot = plan_files.append_blocker(
@@ -365,6 +421,7 @@ class MainLoop:
                     plan=plan,
                     channel=resolved_channel,
                     run_id=run_id,
+                    trace_root=trace_root,
                 )
 
             if tool_policy is ToolPolicy.NONE:
@@ -387,6 +444,7 @@ class MainLoop:
                     plan=plan,
                     channel=resolved_channel,
                     run_id=run_id,
+                    trace_root=trace_root,
                 )
 
             draft = RunCheckpointDraft(
@@ -447,9 +505,11 @@ class MainLoop:
                         batch.suspension.checkpoint_id if batch.suspension is not None else None
                     ),
                     run_id=run_id,
+                    trace_root=trace_root,
                 )
             if append_tool_observations(messages, batch.observations):
                 current_step_had_tool_error = True
+            self.tracer.end_span(step_span)
 
         return self._record_and_return_result(
             memory=session_memory,
@@ -466,6 +526,7 @@ class MainLoop:
             plan=plan,
             channel=resolved_channel,
             run_id=run_id,
+            trace_root=trace_root,
         )
 
     def _run_plan_mode(
@@ -478,7 +539,19 @@ class MainLoop:
         plan_files: PlanFiles,
         channel: Channel,
         run_id: str,
+        trace_root: SpanHandle,
     ) -> RunResult:
+        step_span = self.tracer.begin_span(
+            kind="agent.step",
+            name="step.1",
+            attributes={
+                "step": 1,
+                "phase": "plan",
+                "mode": RunMode.PLAN.value,
+                "tool_policy": ToolPolicy.NONE.value,
+                "visible_tools": 0,
+            },
+        )
         self._notify_thinking(channel=channel, step=1, max_steps=max_steps, phase="plan")
         if plan_files.exists:
             snapshot = plan_files.read_snapshot()
@@ -500,6 +573,7 @@ class MainLoop:
                 plan=snapshot.plan_text,
                 channel=channel,
                 run_id=run_id,
+                trace_root=trace_root,
             )
 
         context = self.context_builder.build(
@@ -521,6 +595,13 @@ class MainLoop:
             phase="plan",
             step=1,
         )
+        step_span.set_attributes(
+            {
+                "provider": response.provider,
+                "tool_calls": len(response.message.tool_calls),
+                "assistant_text_chars": len(response.text),
+            }
+        )
         if response.message.tool_calls:
             text = response.text
             self._record_run(memory=memory, prompt=prompt, response=text)
@@ -536,6 +617,7 @@ class MainLoop:
                 plan=text,
                 channel=channel,
                 run_id=run_id,
+                trace_root=trace_root,
             )
 
         plan_text, todo_text = PlanResponseParser.parse_create_response(
@@ -557,6 +639,7 @@ class MainLoop:
             plan=snapshot.plan_text,
             channel=channel,
             run_id=run_id,
+            trace_root=trace_root,
         )
 
     def resume_approved_approval(
@@ -607,6 +690,7 @@ class MainLoop:
             checkpoint_store=self.checkpoint_store,
             return_result=self._return_result_from_runner,
             record_and_return_result=self._record_and_return_result_from_runner,
+            tracer=self.tracer,
         )
 
     def _return_result_from_runner(
@@ -625,6 +709,7 @@ class MainLoop:
         approval_id: str | None,
         checkpoint_id: str | None,
         run_id: str | None,
+        trace_root: SpanHandle | None = None,
     ) -> RunResult:
         return self._return_result(
             text=text,
@@ -641,6 +726,7 @@ class MainLoop:
             approval_id=approval_id,
             checkpoint_id=checkpoint_id,
             run_id=run_id,
+            trace_root=trace_root,
         )
 
     def _record_and_return_result_from_runner(
@@ -661,6 +747,7 @@ class MainLoop:
         approval_id: str | None,
         checkpoint_id: str | None,
         run_id: str | None,
+        trace_root: SpanHandle | None = None,
     ) -> RunResult:
         return self._record_and_return_result(
             memory=memory,
@@ -679,6 +766,7 @@ class MainLoop:
             approval_id=approval_id,
             checkpoint_id=checkpoint_id,
             run_id=run_id,
+            trace_root=trace_root,
         )
 
     def _complete_provider(
@@ -717,6 +805,15 @@ class MainLoop:
                 )
             except Exception:
                 clear_run_summary(run_id)
+                self.tracer.end_trace(
+                    status="error",
+                    attributes={
+                        "run_id": run_id,
+                        "mode": mode,
+                        "phase": phase,
+                        "step": step,
+                    },
+                )
                 raise
 
     def _return_result(
@@ -736,6 +833,7 @@ class MainLoop:
         approval_id: str | None = None,
         checkpoint_id: str | None = None,
         run_id: str | None = None,
+        trace_root: SpanHandle | None = None,
     ) -> RunResult:
         log_view.log_run_complete(
             logger,
@@ -756,6 +854,35 @@ class MainLoop:
         if run_id is not None:
             log_run_summary(logger, run_id=run_id)
             clear_run_summary(run_id)
+        trace_id: str | None = None
+        trace_path: Path | None = None
+        if trace_root is not None:
+            trace_root.set_attributes(
+                {
+                    "provider": provider,
+                    "stop_reason": stop_reason,
+                    "steps": steps,
+                    "max_steps": max_steps,
+                    "mode": mode.value,
+                    "phase": phase,
+                    "tool_policy": tool_policy.value,
+                    "approval_id": approval_id,
+                    "checkpoint_id": checkpoint_id,
+                    "result_text_chars": len(text),
+                }
+            )
+            record_info = self.tracer.end_trace(
+                status="error"
+                if stop_reason
+                in {
+                    STOP_REASON_APPROVAL_RESUME_FAILED,
+                    STOP_REASON_TOOL_POLICY_BLOCKED,
+                }
+                else "ok"
+            )
+            if record_info is not None:
+                trace_id = record_info.trace_id
+                trace_path = record_info.path
         self._notify_done(
             channel=channel,
             text=text,
@@ -775,6 +902,8 @@ class MainLoop:
             plan=plan,
             approval_id=approval_id,
             checkpoint_id=checkpoint_id,
+            trace_id=trace_id,
+            trace_path=trace_path,
         )
 
     def _record_and_return_result(
@@ -796,6 +925,7 @@ class MainLoop:
         approval_id: str | None = None,
         checkpoint_id: str | None = None,
         run_id: str | None = None,
+        trace_root: SpanHandle | None = None,
     ) -> RunResult:
         self._record_run(memory=memory, prompt=prompt, response=response)
         return self._return_result(
@@ -813,6 +943,7 @@ class MainLoop:
             approval_id=approval_id,
             checkpoint_id=checkpoint_id,
             run_id=run_id,
+            trace_root=trace_root,
         )
 
     def _record_run(self, *, memory: FileMemoryStore, prompt: str, response: str) -> None:

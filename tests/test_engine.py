@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,7 @@ from tiny_claw._internal.tools.builtin.edit import EditTool
 from tiny_claw._internal.tools.builtin.read import ReadTool
 from tiny_claw._internal.tools.builtin.write import WriteTool
 from tiny_claw._internal.tools.registry import ToolRegistry
+from tiny_claw._internal.tracing import FileTraceRecorder, Tracer
 
 
 class FakeProvider:
@@ -284,6 +286,45 @@ def test_main_loop_runs_tool_observation_then_next_turn(tmp_path) -> None:
         and message.content == "observed:ok"
         for message in second_request_messages
     )
+
+
+def test_main_loop_records_agent_step_llm_and_tool_spans(tmp_path) -> None:
+    call = ToolCall(id="call-1", name="fake_tool", arguments={"message": "secret"})
+    tracer = Tracer(recorder=FileTraceRecorder(tmp_path / "state"), capture_mode="metadata")
+    provider = UsageTrackingProvider(
+        inner=FakeProvider(
+            responses=[
+                Message.assistant(tool_calls=(call,)),
+                Message.assistant("done"),
+            ]
+        ),
+        recorder=NullUsageRecorder(),
+        tracer=tracer,
+    )
+    tools = ToolRegistry()
+    tools.register(FakeTool())
+    engine = _build_engine(
+        provider=provider,
+        tools=tools,
+        workdir=tmp_path,
+        tracer=tracer,
+    )
+
+    result = engine.run(prompt="use secret tool", max_steps=2, session=_session(tmp_path))
+
+    assert result.trace_path is not None
+    payload = json.loads(result.trace_path.read_text(encoding="utf-8"))
+    assert payload["root"]["kind"] == "agent.run"
+    assert payload["root"]["attributes"]["stop_reason"] == STOP_REASON_FINAL
+    first_step = payload["root"]["children"][0]
+    second_step = payload["root"]["children"][1]
+    assert first_step["kind"] == "agent.step"
+    assert [child["kind"] for child in first_step["children"]] == ["llm.call", "tool.call"]
+    assert first_step["children"][1]["attributes"]["tool_call_id"] == "call-1"
+    assert second_step["children"][0]["kind"] == "llm.call"
+    serialized = json.dumps(payload)
+    assert "use secret tool" not in serialized
+    assert "secret" not in serialized
 
 
 def test_main_loop_can_read_file_then_return_summary(tmp_path) -> None:
@@ -917,6 +958,7 @@ def test_main_loop_suspends_high_risk_tool_for_approval(tmp_path) -> None:
         tools=tools,
         workdir=tmp_path,
         checkpoint_store=checkpoint_store,
+        tracer=Tracer(recorder=FileTraceRecorder(tmp_path / "state"), capture_mode="metadata"),
     )
     session = _session(tmp_path)
 
@@ -932,6 +974,15 @@ def test_main_loop_suspends_high_risk_tool_for_approval(tmp_path) -> None:
     assert approval.status == "pending"
     assert approval.tool_name == "fake_tool"
     assert checkpoint.pending_tool_calls == (call,)
+    assert result.trace_path is not None
+    payload = json.loads(result.trace_path.read_text(encoding="utf-8"))
+    tool_span = payload["root"]["children"][0]["children"][0]
+    assert tool_span["kind"] == "tool.call"
+    assert tool_span["attributes"]["suspended"] is True
+    pause_span = tool_span["children"][0]
+    assert pause_span["kind"] == "approval.pause"
+    assert pause_span["attributes"]["approval_id"] == result.approval_id
+    assert pause_span["attributes"]["checkpoint_id"] == result.checkpoint_id
 
 
 def test_main_loop_resumes_approved_high_risk_tool(tmp_path) -> None:
@@ -959,6 +1010,7 @@ def test_main_loop_resumes_approved_high_risk_tool(tmp_path) -> None:
         tools=tools,
         workdir=tmp_path,
         checkpoint_store=checkpoint_store,
+        tracer=Tracer(recorder=FileTraceRecorder(tmp_path / "state"), capture_mode="metadata"),
     )
     session = _session(tmp_path)
     suspended = engine.run(prompt="use dangerous tool", max_steps=2, session=session)
@@ -978,6 +1030,11 @@ def test_main_loop_resumes_approved_high_risk_tool(tmp_path) -> None:
     assert not hasattr(provider.requests[1], "context")
     consumed = approval_store.read(session.key, suspended.approval_id)
     assert consumed.status == "consumed"
+    assert resumed.trace_path is not None
+    payload = json.loads(resumed.trace_path.read_text(encoding="utf-8"))
+    assert payload["root"]["name"] == "tiny_claw.approval_resume"
+    assert payload["root"]["children"][0]["kind"] == "approval.resume"
+    assert payload["root"]["children"][0]["attributes"]["approval_id"] == suspended.approval_id
 
 
 def test_main_loop_consumes_approval_after_approved_tool_error(tmp_path) -> None:
@@ -1078,6 +1135,7 @@ def _build_engine(
     tools: ToolRegistry | None = None,
     context_compactor: ContextCompactor | None = None,
     checkpoint_store: FileRunCheckpointStore | None = None,
+    tracer: Tracer | None = None,
 ) -> MainLoop:
     return MainLoop(
         provider=provider,
@@ -1086,6 +1144,7 @@ def _build_engine(
         memory=memory or SessionMemoryStore(workdir / "state"),
         tools=tools or ToolRegistry(),
         checkpoint_store=checkpoint_store,
+        tracer=tracer or Tracer(capture_mode="off"),
     )
 
 

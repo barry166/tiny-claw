@@ -38,3 +38,5 @@ class RunResult:
     plan: str | None = None
     approval_id: str | None = None
     checkpoint_id: str | None = None
+    trace_id: str | None = None
+    trace_path: Path | None = None

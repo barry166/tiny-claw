@@ -21,6 +21,7 @@ from tiny_claw._internal.provider.base import (
     LLMResponse,
     LLMUsage,
 )
+from tiny_claw._internal.tracing import NullTracer, Tracer, elapsed_ms
 
 logger = logging.getLogger(__name__)
 _WRITE_LOCK = Lock()
@@ -113,6 +114,7 @@ class FileUsageRecorder:
 class UsageTrackingProvider:
     inner: LLMProvider
     recorder: UsageRecorder
+    tracer: Tracer = field(default_factory=NullTracer)
 
     @property
     def name(self) -> str:
@@ -120,9 +122,27 @@ class UsageTrackingProvider:
 
     def complete(self, request: LLMRequest) -> LLMResponse:
         started = time.perf_counter()
+        span = self.tracer.begin_span(
+            kind="llm.call",
+            name=f"llm.{self.inner.name}",
+            attributes={
+                "provider": self.inner.name,
+                "message_count": len(request.messages),
+                "tool_choice": request.tool_choice.value,
+                "visible_tools": len(request.tools),
+            },
+        )
         try:
             response = self.inner.complete(request)
         except Exception as exc:
+            self.tracer.end_span(
+                span,
+                status="error",
+                attributes={
+                    "latency_ms": elapsed_ms(started),
+                    "error_type": type(exc).__name__,
+                },
+            )
             self._record_event(
                 request=request,
                 response=None,
@@ -131,6 +151,21 @@ class UsageTrackingProvider:
             )
             raise
 
+        self.tracer.end_span(
+            span,
+            attributes={
+                "latency_ms": elapsed_ms(started),
+                "provider": response.provider,
+                "model": response.model,
+                "input_tokens": response.usage.input_tokens if response.usage is not None else None,
+                "output_tokens": (
+                    response.usage.output_tokens if response.usage is not None else None
+                ),
+                "total_tokens": response.usage.total_tokens if response.usage is not None else None,
+                "tool_calls": len(response.message.tool_calls),
+                "text_chars": len(response.text),
+            },
+        )
         self._record_event(
             request=request,
             response=response,

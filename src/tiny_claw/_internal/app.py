@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 from tiny_claw._internal.approval import (
     ApprovalDecision,
@@ -33,6 +34,7 @@ from tiny_claw._internal.tools.builtin.read import ReadTool
 from tiny_claw._internal.tools.builtin.write import WriteTool
 from tiny_claw._internal.tools.policy import ToolPolicyMiddleware
 from tiny_claw._internal.tools.registry import ToolRegistry
+from tiny_claw._internal.tracing import FileTraceRecorder, NullTracer, TraceMode, Tracer
 
 
 @dataclass(frozen=True)
@@ -148,9 +150,11 @@ def build_application(
     provider: LLMProvider | None = None,
 ) -> Application:
     raw_provider = provider if provider is not None else _build_provider(settings)
+    tracer = _build_tracer(settings)
     resolved_provider = UsageTrackingProvider(
         inner=raw_provider,
         recorder=FileUsageRecorder(settings.state_dir),
+        tracer=tracer,
     )
     session_manager = SessionManager(
         state_dir=settings.state_dir,
@@ -170,6 +174,7 @@ def build_application(
         context_builder=context_builder,
         context_compactor=context_compactor,
         memory=memory,
+        tracer=tracer,
     )
     tools = _build_tool_registry(
         settings.workdir,
@@ -191,6 +196,7 @@ def build_application(
         memory=memory,
         tools=tools,
         checkpoint_store=checkpoint_store,
+        tracer=tracer,
     )
     return Application(
         settings=settings,
@@ -199,6 +205,16 @@ def build_application(
         session_manager=session_manager,
         approval_store=approval_store,
         checkpoint_store=checkpoint_store,
+    )
+
+
+def _build_tracer(settings: Settings) -> Tracer:
+    if settings.trace_mode == "off":
+        return NullTracer()
+    return Tracer(
+        recorder=FileTraceRecorder(settings.state_dir),
+        capture_mode=cast(TraceMode, settings.trace_mode),
+        max_payload_chars=settings.trace_max_payload_chars,
     )
 
 

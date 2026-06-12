@@ -24,6 +24,7 @@ from tiny_claw._internal.schema.message import Message, ToolDefinition
 from tiny_claw._internal.session import SessionMemoryStore, SessionRef
 from tiny_claw._internal.tools.builtin.read import ReadTool
 from tiny_claw._internal.tools.registry import ToolRegistry
+from tiny_claw._internal.tracing import NullTracer, SpanHandle, Tracer
 
 SUBAGENT_DEFAULT_MAX_STEPS = 6
 SUBAGENT_MAX_STEPS_LIMIT = 12
@@ -63,6 +64,7 @@ class SubagentRunner:
     context_builder: ContextBuilder
     context_compactor: ContextCompactor
     memory: SessionMemoryStore
+    tracer: Tracer = NullTracer()
     max_result_chars: int = SUBAGENT_RESULT_MAX_CHARS
 
     def run_explorer(
@@ -78,6 +80,34 @@ class SubagentRunner:
 
         resolved_max_steps = _bounded_max_steps(max_steps)
         child_session = _child_session(parent_session)
+        trace_root = None
+        if self.tracer.has_active_trace():
+            trace_root = self.tracer.begin_span(
+                kind="subagent.run",
+                name="subagent.explorer",
+                attributes={
+                    "parent_session_key": parent_session.key,
+                    "child_session_key": child_session.key,
+                    "child_session_source": child_session.source,
+                    "max_steps": resolved_max_steps,
+                    "task_chars": len(normalized_task),
+                },
+            )
+        else:
+            trace_root = self.tracer.begin_trace(
+                trace_id=uuid.uuid4().hex,
+                session_key=child_session.key,
+                session_source=child_session.source,
+                kind="subagent.run",
+                name="subagent.explorer",
+                attributes={
+                    "parent_session_key": parent_session.key,
+                    "child_session_key": child_session.key,
+                    "child_session_source": child_session.source,
+                    "max_steps": resolved_max_steps,
+                    "task_chars": len(normalized_task),
+                },
+            )
         logger.info(
             (
                 "[Subagent] Explorer 子智能体启动 parent_session=%s "
@@ -102,6 +132,7 @@ class SubagentRunner:
         tool_definitions = tools.definitions()
         tool_executor = ToolExecutor(
             tools=tools,
+            tracer=self.tracer,
             visible_tool_names=tuple(definition.name for definition in tool_definitions),
         )
         last_text = ""
@@ -139,6 +170,15 @@ class SubagentRunner:
                         last_provider,
                         len(text),
                     )
+                    trace_root.set_attributes(
+                        {
+                            "stop_reason": STOP_REASON_FINAL,
+                            "steps": step,
+                            "provider": last_provider,
+                            "result_text_chars": len(text),
+                        }
+                    )
+                    self._end_trace_root(trace_root)
                     return SubagentResult(
                         text=text,
                         provider=last_provider,
@@ -180,6 +220,15 @@ class SubagentRunner:
                 last_provider,
                 len(exhausted_text),
             )
+            trace_root.set_attributes(
+                {
+                    "stop_reason": STOP_REASON_MAX_STEPS_EXHAUSTED,
+                    "steps": resolved_max_steps,
+                    "provider": last_provider,
+                    "result_text_chars": len(exhausted_text),
+                }
+            )
+            self._end_trace_root(trace_root)
             return SubagentResult(
                 text=exhausted_text,
                 provider=last_provider,
@@ -189,7 +238,16 @@ class SubagentRunner:
                 child_session_key=child_session.key,
             )
         finally:
+            self._end_trace_root(trace_root)
             clear_run_summary(run_id)
+
+    def _end_trace_root(self, trace_root: SpanHandle) -> None:
+        if not trace_root.active:
+            return
+        if trace_root.span_id == self.tracer.root_span_id():
+            self.tracer.end_trace()
+        else:
+            self.tracer.end_span(trace_root)
 
     def _final_text(self, text: str, *, child_session: SessionRef) -> str:
         body = text.strip() or "未找到确切答案。子智能体没有返回可用报告。"

@@ -67,9 +67,33 @@ def test_settings_reads_runtime_tool_policy_and_approval_configuration() -> None
     assert settings.approval_timeout_seconds == 120
 
 
+def test_settings_reads_tracing_configuration() -> None:
+    settings = Settings.from_env(
+        {
+            "TINY_CLAW_TRACE_MODE": "replay",
+            "TINY_CLAW_TRACE_MAX_PAYLOAD_CHARS": "1234",
+        }
+    )
+
+    assert settings.trace_mode == "replay"
+    assert settings.trace_max_payload_chars == 1234
+
+
+def test_settings_defaults_to_metadata_tracing() -> None:
+    settings = Settings.from_env({})
+
+    assert settings.trace_mode == "metadata"
+    assert settings.trace_max_payload_chars == 4_000
+
+
 def test_settings_rejects_invalid_approval_provider() -> None:
     with pytest.raises(ConfigurationError, match="APPROVAL_PROVIDER"):
         Settings.from_env({"TINY_CLAW_APPROVAL_PROVIDER": "slack"})
+
+
+def test_settings_rejects_invalid_trace_mode() -> None:
+    with pytest.raises(ConfigurationError, match="TRACE_MODE"):
+        Settings.from_env({"TINY_CLAW_TRACE_MODE": "verbose"})
 
 
 def test_settings_rejects_unknown_enabled_tool() -> None:
