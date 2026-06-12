@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from tiny_claw._internal.provider.base import LLMUsage
 from tiny_claw._internal.schema.message import ToolCall
 from tiny_claw._internal.tools.base import ToolOutput
 
@@ -110,13 +111,15 @@ def log_model_response(
     provider: str,
     tool_calls: tuple[ToolCall, ...],
     text: str,
+    usage: LLMUsage | None = None,
 ) -> None:
     logger.info(
-        "%s provider=%s tool_calls=%s text_chars=%s",
+        "%s provider=%s tool_calls=%s text_chars=%s%s",
         color("[Engine] 收到模型响应", COLOR_CYAN),
         provider,
         len(tool_calls),
         len(text),
+        _usage_suffix(usage),
     )
     if text:
         logger.info(
@@ -277,6 +280,21 @@ def log_run_return(
 
 def format_json(value: Mapping[str, Any]) -> str:
     return json.dumps(dict(value), ensure_ascii=False, sort_keys=True)
+
+
+def _usage_suffix(usage: LLMUsage | None) -> str:
+    if usage is None:
+        return ""
+    parts = []
+    if usage.input_tokens is not None:
+        parts.append(f"input_tokens={usage.input_tokens}")
+    if usage.output_tokens is not None:
+        parts.append(f"output_tokens={usage.output_tokens}")
+    if usage.total_tokens is not None:
+        parts.append(f"total_tokens={usage.total_tokens}")
+    if not parts:
+        return ""
+    return " " + " ".join(parts)
 
 
 def preview_text(text: str, *, max_chars: int) -> str:

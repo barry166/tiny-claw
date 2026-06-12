@@ -54,6 +54,11 @@ TINY_CLAW_PROVIDER=echo uv run tiny-claw run "hello"
 `run --session <name>` 会为 CLI 创建独立会话记忆；不传时使用当前工作区的默认
 session。飞书入口会按 `chat_id` 自动隔离上下文。
 
+Each model call is tracked by a provider decorator. Usage metadata such as
+provider, model, session, run step, latency, and token counts is appended to
+`TINY_CLAW_STATE_DIR/usage/model-calls.jsonl`. Prompt text, assistant text, tool
+arguments, and API keys are not written to this usage log.
+
 ## HTTP Server and Feishu
 
 `tiny-claw serve` starts a unified HTTP event server. The first event endpoint is

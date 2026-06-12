@@ -10,7 +10,7 @@ from typing import Any
 from openai import OpenAI
 
 from tiny_claw._internal.errors import ConfigurationError, ProviderError
-from tiny_claw._internal.provider.base import LLMRequest, LLMResponse, ToolChoice
+from tiny_claw._internal.provider.base import LLMRequest, LLMResponse, LLMUsage, ToolChoice
 from tiny_claw._internal.schema.message import Message, Role, ToolCall, ToolDefinition
 
 
@@ -114,6 +114,7 @@ def _to_llm_response(*, response: Any, provider: str, model: str) -> LLMResponse
     message = choice.message
     text = message.content or ""
     tool_calls = tuple(_from_openai_tool_call(call) for call in (message.tool_calls or ()))
+    raw_usage = _dump_sdk_object(getattr(response, "usage", None))
     return LLMResponse(
         message=Message.assistant(content=text, tool_calls=tool_calls),
         provider=provider,
@@ -121,8 +122,9 @@ def _to_llm_response(*, response: Any, provider: str, model: str) -> LLMResponse
         metadata={
             "id": getattr(response, "id", None),
             "finish_reason": getattr(choice, "finish_reason", None),
-            "usage": _dump_sdk_object(getattr(response, "usage", None)),
+            "usage": raw_usage,
         },
+        usage=_to_usage(raw_usage),
     )
 
 
@@ -149,3 +151,36 @@ def _dump_sdk_object(value: Any) -> Any:
     if hasattr(value, "model_dump"):
         return value.model_dump()
     return value
+
+
+def _to_usage(raw_usage: Any) -> LLMUsage | None:
+    if raw_usage is None:
+        return None
+    completion_details = _get(raw_usage, "completion_tokens_details")
+    prompt_details = _get(raw_usage, "prompt_tokens_details")
+    return LLMUsage(
+        input_tokens=_int_or_none(_get(raw_usage, "prompt_tokens")),
+        output_tokens=_int_or_none(_get(raw_usage, "completion_tokens")),
+        total_tokens=_int_or_none(_get(raw_usage, "total_tokens")),
+        cache_read_input_tokens=_int_or_none(_get(prompt_details, "cached_tokens")),
+        reasoning_output_tokens=_int_or_none(_get(completion_details, "reasoning_tokens")),
+    )
+
+
+def _get(value: Any, name: str) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, Mapping):
+        return value.get(name)
+    return getattr(value, name, None)
+
+
+def _int_or_none(value: Any) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None

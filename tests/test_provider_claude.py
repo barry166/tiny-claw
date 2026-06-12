@@ -50,6 +50,40 @@ def test_claude_provider_maps_text_request_and_response() -> None:
     assert client.requests[0]["messages"] == [
         {"role": "user", "content": [{"type": "text", "text": "ping"}]}
     ]
+    assert result.usage is None
+
+
+def test_claude_provider_maps_usage() -> None:
+    response = _message_response(
+        content=[{"type": "text", "text": "hello"}],
+        usage={
+            "input_tokens": 12,
+            "output_tokens": 8,
+            "cache_read_input_tokens": 4,
+            "cache_creation_input_tokens": 2,
+        },
+    )
+    provider = ClaudeProvider(
+        api_key="key",
+        model="claude-test",
+        client=FakeClaudeClient(response=response),
+    )
+
+    result = provider.complete(LLMRequest(messages=(Message.user("ping"),)))
+
+    assert result.usage is not None
+    assert result.usage.input_tokens == 12
+    assert result.usage.output_tokens == 8
+    assert result.usage.total_tokens == 20
+    assert result.usage.cache_read_input_tokens == 4
+    assert result.usage.cache_creation_input_tokens == 2
+    assert result.metadata is not None
+    assert result.metadata["usage"] == {
+        "input_tokens": 12,
+        "output_tokens": 8,
+        "cache_read_input_tokens": 4,
+        "cache_creation_input_tokens": 2,
+    }
 
 
 def test_claude_provider_maps_tools_tool_choice_and_tool_results() -> None:
@@ -148,13 +182,13 @@ def test_claude_provider_requires_api_key() -> None:
         ClaudeProvider(api_key=None, model="claude-test", client=object())
 
 
-def _message_response(*, content: list[dict[str, Any]]) -> Any:
+def _message_response(*, content: list[dict[str, Any]], usage: Any = None) -> Any:
     return SimpleNamespace(
         id="msg-1",
         model="claude-test",
         content=content,
         stop_reason="end_turn",
-        usage=None,
+        usage=usage,
     )
 
 

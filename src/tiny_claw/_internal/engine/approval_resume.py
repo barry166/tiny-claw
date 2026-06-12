@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 
@@ -46,7 +47,12 @@ from tiny_claw._internal.engine.run_types import (
 )
 from tiny_claw._internal.engine.tool_executor import ToolExecutor
 from tiny_claw._internal.memory.file_store import FileMemoryStore
-from tiny_claw._internal.provider.base import LLMProvider, LLMRequest
+from tiny_claw._internal.provider.base import LLMProvider, LLMRequest, LLMResponse, ToolChoice
+from tiny_claw._internal.provider.tracking import (
+    ModelCallScope,
+    clear_run_summary,
+    model_call_scope,
+)
 from tiny_claw._internal.schema.message import Message, ToolCall, ToolCallResult, ToolDefinition
 from tiny_claw._internal.session import SessionMemoryStore, SessionRef
 from tiny_claw._internal.tools.registry import ToolRegistry
@@ -69,6 +75,7 @@ ReturnResult = Callable[
         str | None,
         str | None,
         str | None,
+        str | None,
     ],
     RunResult,
 ]
@@ -88,6 +95,7 @@ RecordAndReturnResult = Callable[
         ToolPolicy,
         str | None,
         Channel,
+        str | None,
         str | None,
         str | None,
     ],
@@ -159,6 +167,7 @@ class ApprovalResumeRunner:
                 resolved_channel,
                 batch.suspension.approval_id if batch.suspension is not None else None,
                 batch.suspension.checkpoint_id if batch.suspension is not None else None,
+                None,
             )
 
         return self._continue_from_checkpoint(
@@ -292,6 +301,7 @@ class ApprovalResumeRunner:
         last_text = _last_message_text(messages)
         last_provider = checkpoint.provider
         tool_policy = ToolPolicy(checkpoint.tool_policy)
+        run_id = uuid.uuid4().hex
 
         for step in range(checkpoint.step + 1, checkpoint.max_steps + 1):
             phase = phase_for_step(mode=mode, step=step, plan_required=plan_required)
@@ -323,13 +333,16 @@ class ApprovalResumeRunner:
                     truncated_tool_results=compaction.truncated_tool_results,
                     still_over_budget=compaction.still_over_budget,
                 )
-            response = self.provider.complete(
-                LLMRequest(
-                    messages=compaction.messages,
-                    tools=request_tool_definitions,
-                    max_steps=checkpoint.max_steps,
-                    tool_choice=to_tool_choice(tool_policy),
-                )
+            response = self._complete_provider(
+                messages=compaction.messages,
+                tools=request_tool_definitions,
+                max_steps=checkpoint.max_steps,
+                tool_choice=to_tool_choice(tool_policy),
+                session=session,
+                run_id=run_id,
+                mode=mode.value,
+                phase=phase,
+                step=step,
             )
             messages.append(response.message)
             last_text = response.text
@@ -340,6 +353,7 @@ class ApprovalResumeRunner:
                 provider=response.provider,
                 tool_calls=response.message.tool_calls,
                 text=response.text,
+                usage=response.usage,
             )
 
             if not response.message.tool_calls:
@@ -379,6 +393,7 @@ class ApprovalResumeRunner:
                     channel,
                     None,
                     None,
+                    run_id,
                 )
 
             if tool_policy is ToolPolicy.NONE:
@@ -398,6 +413,7 @@ class ApprovalResumeRunner:
                     channel,
                     None,
                     None,
+                    run_id,
                 )
 
             draft = RunCheckpointDraft(
@@ -451,6 +467,7 @@ class ApprovalResumeRunner:
                     channel,
                     batch.suspension.approval_id if batch.suspension is not None else None,
                     batch.suspension.checkpoint_id if batch.suspension is not None else None,
+                    run_id,
                 )
             if append_tool_observations(messages, batch.observations):
                 current_step_had_tool_error = True
@@ -471,7 +488,46 @@ class ApprovalResumeRunner:
             channel,
             None,
             None,
+            run_id,
         )
+
+    def _complete_provider(
+        self,
+        *,
+        messages: tuple[Message, ...],
+        tools: tuple[ToolDefinition, ...],
+        max_steps: int,
+        tool_choice: ToolChoice,
+        session: SessionRef,
+        run_id: str,
+        mode: str,
+        phase: str | None,
+        step: int,
+    ) -> LLMResponse:
+        scope = ModelCallScope(
+            session_key=session.key,
+            session_source=session.source,
+            session_display_name=session.display_name,
+            run_id=run_id,
+            mode=mode,
+            phase=phase,
+            step=step,
+            max_steps=max_steps,
+            caller="approval_resume",
+        )
+        with model_call_scope(scope):
+            try:
+                return self.provider.complete(
+                    LLMRequest(
+                        messages=messages,
+                        tools=tools,
+                        max_steps=max_steps,
+                        tool_choice=tool_choice,
+                    )
+                )
+            except Exception:
+                clear_run_summary(run_id)
+                raise
 
     def _read_resume_checkpoint(
         self,
@@ -512,6 +568,7 @@ class ApprovalResumeRunner:
             ToolPolicy.AUTO,
             None,
             channel,
+            None,
             None,
             None,
             None,

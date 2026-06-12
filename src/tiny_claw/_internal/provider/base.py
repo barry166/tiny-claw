@@ -16,6 +16,16 @@ class ToolChoice(StrEnum):
 
 
 @dataclass(frozen=True)
+class LLMUsage:
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    total_tokens: int | None = None
+    cache_read_input_tokens: int | None = None
+    cache_creation_input_tokens: int | None = None
+    reasoning_output_tokens: int | None = None
+
+
+@dataclass(frozen=True)
 class LLMRequest:
     messages: tuple[Message, ...]
     tools: tuple[ToolDefinition, ...] = ()
@@ -29,6 +39,7 @@ class LLMResponse:
     provider: str
     model: str | None = None
     metadata: Mapping[str, Any] | None = None
+    usage: LLMUsage | None = None
 
     @property
     def text(self) -> str:

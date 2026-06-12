@@ -50,6 +50,7 @@ def test_explorer_subagent_tool_schema_and_default_steps(tmp_path) -> None:
     assert "[Explorer Subagent Report]" in result.content
     assert "已确认事实" in result.content
     assert provider.requests[0].max_steps == 6
+    assert not hasattr(provider.requests[0], "context")
 
 
 def test_explorer_subagent_rejects_invalid_arguments(tmp_path) -> None:

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from tiny_claw._internal.app import build_application, build_integration_application
 from tiny_claw._internal.errors import ConfigurationError
 from tiny_claw._internal.provider.base import LLMRequest, LLMResponse
+from tiny_claw._internal.provider.tracking import UsageTrackingProvider
 from tiny_claw._internal.schema.message import Message
 from tiny_claw._internal.session import SessionRef
 from tiny_claw._internal.settings import Settings
@@ -74,6 +77,7 @@ def test_application_uses_injected_provider(tmp_path) -> None:
     app = build_application(settings, provider=FakeProvider())
 
     assert app.engine.provider_name == "fake-provider"
+    assert isinstance(app.engine.provider, UsageTrackingProvider)
 
 
 def test_application_uses_default_cli_session_when_session_is_omitted(tmp_path) -> None:
@@ -91,6 +95,37 @@ def test_application_uses_default_cli_session_when_session_is_omitted(tmp_path) 
         "last_response: fake",
     )
     assert not hasattr(provider.requests[0], "session")
+    assert not hasattr(provider.requests[0], "context")
+
+
+def test_application_records_usage_jsonl_without_message_content(tmp_path) -> None:
+    class UsageProvider(FakeProvider):
+        @property
+        def name(self) -> str:
+            return "usage-provider"
+
+        def complete(self, request: LLMRequest) -> LLMResponse:
+            self.requests.append(request)
+            return LLMResponse(
+                message=Message.assistant(content="assistant secret output"),
+                provider=self.name,
+                model="usage-model",
+            )
+
+    settings = Settings.from_env({"TINY_CLAW_STATE_DIR": str(tmp_path)})
+    provider = UsageProvider()
+    app = build_application(settings, provider=provider)
+
+    app.run(prompt="hello secret prompt", max_steps=1)
+
+    usage_path = tmp_path / "usage" / "model-calls.jsonl"
+    payload = json.loads(usage_path.read_text(encoding="utf-8"))
+    assert payload["provider"] == "usage-provider"
+    assert payload["caller"] == "main_loop"
+    assert payload["session_key"]
+    serialized = json.dumps(payload)
+    assert "hello secret prompt" not in serialized
+    assert "assistant secret output" not in serialized
 
 
 def test_application_isolates_named_cli_sessions(tmp_path) -> None:

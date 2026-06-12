@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from dataclasses import dataclass
 from functools import partial
 
@@ -45,8 +46,19 @@ from tiny_claw._internal.engine.run_types import (
 )
 from tiny_claw._internal.engine.tool_executor import ToolExecutor
 from tiny_claw._internal.memory.file_store import FileMemoryStore
-from tiny_claw._internal.provider.base import LLMProvider, LLMRequest, ToolChoice
-from tiny_claw._internal.schema.message import Message
+from tiny_claw._internal.provider.base import (
+    LLMProvider,
+    LLMRequest,
+    LLMResponse,
+    ToolChoice,
+)
+from tiny_claw._internal.provider.tracking import (
+    ModelCallScope,
+    clear_run_summary,
+    log_run_summary,
+    model_call_scope,
+)
+from tiny_claw._internal.schema.message import Message, ToolDefinition
 from tiny_claw._internal.session import SessionMemoryStore, SessionRef
 from tiny_claw._internal.tools.registry import ToolRegistry
 
@@ -90,6 +102,7 @@ class MainLoop:
         if max_steps < 1:
             raise ValueError("max_steps must be greater than or equal to 1")
 
+        run_id = uuid.uuid4().hex
         resolved_channel = channel or NullChannel()
         notify_channel(
             partial(
@@ -110,6 +123,7 @@ class MainLoop:
                 memory=session_memory,
                 plan_files=plan_files,
                 channel=resolved_channel,
+                run_id=run_id,
             )
         context = self.context_builder.build(
             prompt=prompt,
@@ -175,6 +189,7 @@ class MainLoop:
                         tool_policy=ToolPolicy.AUTO,
                         plan=plan,
                         channel=resolved_channel,
+                        run_id=run_id,
                     )
                 messages.append(
                     Message.user(PlanPromptBuilder.execute_current_task_prompt(snapshot))
@@ -216,13 +231,16 @@ class MainLoop:
                     truncated_tool_results=compaction.truncated_tool_results,
                     still_over_budget=compaction.still_over_budget,
                 )
-            response = self.provider.complete(
-                LLMRequest(
-                    messages=compaction.messages,
-                    tools=request_tool_definitions,
-                    max_steps=max_steps,
-                    tool_choice=to_tool_choice(tool_policy),
-                )
+            response = self._complete_provider(
+                messages=compaction.messages,
+                tools=request_tool_definitions,
+                max_steps=max_steps,
+                tool_choice=to_tool_choice(tool_policy),
+                session=session,
+                run_id=run_id,
+                mode=mode.value,
+                phase=phase,
+                step=step,
             )
             messages.append(response.message)
             last_text = response.text
@@ -234,6 +252,7 @@ class MainLoop:
                 provider=response.provider,
                 tool_calls=response.message.tool_calls,
                 text=response.text,
+                usage=response.usage,
             )
 
             if mode is RunMode.PLAN_ACT and phase == "plan":
@@ -242,34 +261,21 @@ class MainLoop:
                         "规划阶段收到工具调用 tool_calls=%s，已阻止进入执行阶段",
                         tool_call_count,
                     )
-                    self._record_run(
+                    return self._record_and_return_result(
                         memory=session_memory,
                         prompt=prompt,
                         response=last_text,
-                    )
-                    log_view.log_run_return(
-                        logger,
-                        text=last_text,
                         provider=last_provider,
-                        stop_reason=STOP_REASON_TOOL_POLICY_BLOCKED,
-                    )
-                    self._notify_done(
-                        channel=resolved_channel,
-                        text=last_text,
                         stop_reason=STOP_REASON_TOOL_POLICY_BLOCKED,
                         steps=step,
                         max_steps=max_steps,
-                    )
-                    return RunResult(
-                        text=last_text,
-                        provider=last_provider,
-                        steps=step,
-                        max_steps=max_steps,
-                        workdir=session.workdir,
-                        stop_reason=STOP_REASON_TOOL_POLICY_BLOCKED,
-                        mode=mode,
+                        session=session,
+                        run_mode=mode,
+                        phase=phase,
                         tool_policy=tool_policy,
                         plan=plan,
+                        channel=resolved_channel,
+                        run_id=run_id,
                     )
 
                 plan_text, todo_text = PlanResponseParser.parse_create_response(
@@ -286,11 +292,6 @@ class MainLoop:
                 )
 
                 if step == max_steps:
-                    self._record_run(
-                        memory=session_memory,
-                        prompt=prompt,
-                        response=last_text,
-                    )
                     logger.warning(
                         "主循环结束 reason=%s steps=%s provider=%s mode=%s phase=%s",
                         STOP_REASON_MAX_STEPS_EXHAUSTED,
@@ -299,39 +300,21 @@ class MainLoop:
                         mode.value,
                         phase,
                     )
-                    log_view.log_run_complete(
-                        logger,
+                    return self._record_and_return_result(
+                        memory=session_memory,
+                        prompt=prompt,
+                        response=last_text,
                         provider=last_provider,
                         stop_reason=STOP_REASON_MAX_STEPS_EXHAUSTED,
                         steps=step,
                         max_steps=max_steps,
-                        mode=mode.value,
+                        session=session,
+                        run_mode=mode,
                         phase=phase,
-                        tool_policy=tool_policy.value,
-                    )
-                    log_view.log_run_return(
-                        logger,
-                        text=last_text,
-                        provider=last_provider,
-                        stop_reason=STOP_REASON_MAX_STEPS_EXHAUSTED,
-                    )
-                    self._notify_done(
-                        channel=resolved_channel,
-                        text=last_text,
-                        stop_reason=STOP_REASON_MAX_STEPS_EXHAUSTED,
-                        steps=step,
-                        max_steps=max_steps,
-                    )
-                    return RunResult(
-                        text=last_text,
-                        provider=last_provider,
-                        steps=step,
-                        max_steps=max_steps,
-                        workdir=session.workdir,
-                        stop_reason=STOP_REASON_MAX_STEPS_EXHAUSTED,
-                        mode=mode,
                         tool_policy=tool_policy,
                         plan=plan,
+                        channel=resolved_channel,
+                        run_id=run_id,
                     )
 
                 messages.append(
@@ -381,6 +364,7 @@ class MainLoop:
                     tool_policy=tool_policy,
                     plan=plan,
                     channel=resolved_channel,
+                    run_id=run_id,
                 )
 
             if tool_policy is ToolPolicy.NONE:
@@ -402,6 +386,7 @@ class MainLoop:
                     tool_policy=tool_policy,
                     plan=plan,
                     channel=resolved_channel,
+                    run_id=run_id,
                 )
 
             draft = RunCheckpointDraft(
@@ -461,6 +446,7 @@ class MainLoop:
                     checkpoint_id=(
                         batch.suspension.checkpoint_id if batch.suspension is not None else None
                     ),
+                    run_id=run_id,
                 )
             if append_tool_observations(messages, batch.observations):
                 current_step_had_tool_error = True
@@ -479,6 +465,7 @@ class MainLoop:
             tool_policy=tool_policy,
             plan=plan,
             channel=resolved_channel,
+            run_id=run_id,
         )
 
     def _run_plan_mode(
@@ -490,6 +477,7 @@ class MainLoop:
         memory: FileMemoryStore,
         plan_files: PlanFiles,
         channel: Channel,
+        run_id: str,
     ) -> RunResult:
         self._notify_thinking(channel=channel, step=1, max_steps=max_steps, phase="plan")
         if plan_files.exists:
@@ -511,6 +499,7 @@ class MainLoop:
                 tool_policy=ToolPolicy.NONE,
                 plan=snapshot.plan_text,
                 channel=channel,
+                run_id=run_id,
             )
 
         context = self.context_builder.build(
@@ -521,13 +510,16 @@ class MainLoop:
         messages = list(context.messages)
         messages.append(Message.system(PlanPromptBuilder.create_system_prompt()))
         compaction = self.context_compactor.compact(messages)
-        response = self.provider.complete(
-            LLMRequest(
-                messages=compaction.messages,
-                tools=(),
-                max_steps=max_steps,
-                tool_choice=ToolChoice.NONE,
-            )
+        response = self._complete_provider(
+            messages=compaction.messages,
+            tools=(),
+            max_steps=max_steps,
+            tool_choice=ToolChoice.NONE,
+            session=session,
+            run_id=run_id,
+            mode=RunMode.PLAN.value,
+            phase="plan",
+            step=1,
         )
         if response.message.tool_calls:
             text = response.text
@@ -543,6 +535,7 @@ class MainLoop:
                 tool_policy=ToolPolicy.NONE,
                 plan=text,
                 channel=channel,
+                run_id=run_id,
             )
 
         plan_text, todo_text = PlanResponseParser.parse_create_response(
@@ -563,6 +556,7 @@ class MainLoop:
             tool_policy=ToolPolicy.NONE,
             plan=snapshot.plan_text,
             channel=channel,
+            run_id=run_id,
         )
 
     def resume_approved_approval(
@@ -630,6 +624,7 @@ class MainLoop:
         phase: str | None,
         approval_id: str | None,
         checkpoint_id: str | None,
+        run_id: str | None,
     ) -> RunResult:
         return self._return_result(
             text=text,
@@ -645,6 +640,7 @@ class MainLoop:
             phase=phase,
             approval_id=approval_id,
             checkpoint_id=checkpoint_id,
+            run_id=run_id,
         )
 
     def _record_and_return_result_from_runner(
@@ -664,6 +660,7 @@ class MainLoop:
         channel: Channel,
         approval_id: str | None,
         checkpoint_id: str | None,
+        run_id: str | None,
     ) -> RunResult:
         return self._record_and_return_result(
             memory=memory,
@@ -681,7 +678,46 @@ class MainLoop:
             channel=channel,
             approval_id=approval_id,
             checkpoint_id=checkpoint_id,
+            run_id=run_id,
         )
+
+    def _complete_provider(
+        self,
+        *,
+        messages: tuple[Message, ...],
+        tools: tuple[ToolDefinition, ...],
+        max_steps: int,
+        tool_choice: ToolChoice,
+        session: SessionRef,
+        run_id: str,
+        mode: str,
+        phase: str | None,
+        step: int,
+    ) -> LLMResponse:
+        scope = ModelCallScope(
+            session_key=session.key,
+            session_source=session.source,
+            session_display_name=session.display_name,
+            run_id=run_id,
+            mode=mode,
+            phase=phase,
+            step=step,
+            max_steps=max_steps,
+            caller="main_loop",
+        )
+        with model_call_scope(scope):
+            try:
+                return self.provider.complete(
+                    LLMRequest(
+                        messages=messages,
+                        tools=tools,
+                        max_steps=max_steps,
+                        tool_choice=tool_choice,
+                    )
+                )
+            except Exception:
+                clear_run_summary(run_id)
+                raise
 
     def _return_result(
         self,
@@ -699,6 +735,7 @@ class MainLoop:
         phase: str | None = None,
         approval_id: str | None = None,
         checkpoint_id: str | None = None,
+        run_id: str | None = None,
     ) -> RunResult:
         log_view.log_run_complete(
             logger,
@@ -716,6 +753,9 @@ class MainLoop:
             provider=provider,
             stop_reason=stop_reason,
         )
+        if run_id is not None:
+            log_run_summary(logger, run_id=run_id)
+            clear_run_summary(run_id)
         self._notify_done(
             channel=channel,
             text=text,
@@ -755,6 +795,7 @@ class MainLoop:
         channel: Channel,
         approval_id: str | None = None,
         checkpoint_id: str | None = None,
+        run_id: str | None = None,
     ) -> RunResult:
         self._record_run(memory=memory, prompt=prompt, response=response)
         return self._return_result(
@@ -771,6 +812,7 @@ class MainLoop:
             phase=phase,
             approval_id=approval_id,
             checkpoint_id=checkpoint_id,
+            run_id=run_id,
         )
 
     def _record_run(self, *, memory: FileMemoryStore, prompt: str, response: str) -> None:

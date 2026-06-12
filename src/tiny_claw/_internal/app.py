@@ -21,6 +21,7 @@ from tiny_claw._internal.provider.base import LLMProvider
 from tiny_claw._internal.provider.claude import ClaudeProvider
 from tiny_claw._internal.provider.echo import EchoProvider
 from tiny_claw._internal.provider.openai import OpenAIProvider
+from tiny_claw._internal.provider.tracking import FileUsageRecorder, UsageTrackingProvider
 from tiny_claw._internal.session import SessionManager, SessionMemoryStore, SessionRef
 from tiny_claw._internal.settings import DEFAULT_OPENAI_MODEL, Settings
 from tiny_claw._internal.subagent import SubagentRunner
@@ -146,7 +147,11 @@ def build_application(
     *,
     provider: LLMProvider | None = None,
 ) -> Application:
-    resolved_provider = provider if provider is not None else _build_provider(settings)
+    raw_provider = provider if provider is not None else _build_provider(settings)
+    resolved_provider = UsageTrackingProvider(
+        inner=raw_provider,
+        recorder=FileUsageRecorder(settings.state_dir),
+    )
     session_manager = SessionManager(
         state_dir=settings.state_dir,
         workdir=settings.workdir,

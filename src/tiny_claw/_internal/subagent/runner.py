@@ -14,8 +14,13 @@ from tiny_claw._internal.engine.run_types import (
 )
 from tiny_claw._internal.engine.tool_executor import ToolExecutor
 from tiny_claw._internal.memory.file_store import FileMemoryStore
-from tiny_claw._internal.provider.base import LLMProvider, LLMRequest, ToolChoice
-from tiny_claw._internal.schema.message import Message
+from tiny_claw._internal.provider.base import LLMProvider, LLMRequest, LLMResponse, ToolChoice
+from tiny_claw._internal.provider.tracking import (
+    ModelCallScope,
+    clear_run_summary,
+    model_call_scope,
+)
+from tiny_claw._internal.schema.message import Message, ToolDefinition
 from tiny_claw._internal.session import SessionMemoryStore, SessionRef
 from tiny_claw._internal.tools.builtin.read import ReadTool
 from tiny_claw._internal.tools.registry import ToolRegistry
@@ -102,85 +107,89 @@ class SubagentRunner:
         last_text = ""
         last_provider = self.provider.name
         recent_observation_texts: list[str] = []
+        run_id = uuid.uuid4().hex
 
-        for step in range(1, resolved_max_steps + 1):
-            compaction = self.context_compactor.compact(messages)
-            response = self.provider.complete(
-                LLMRequest(
+        try:
+            for step in range(1, resolved_max_steps + 1):
+                compaction = self.context_compactor.compact(messages)
+                response = self._complete_provider(
                     messages=compaction.messages,
                     tools=tool_definitions,
                     max_steps=resolved_max_steps,
-                    tool_choice=ToolChoice.AUTO,
+                    session=child_session,
+                    run_id=run_id,
+                    step=step,
                 )
+                messages.append(response.message)
+                last_text = response.text
+                last_provider = response.provider
+
+                if not response.message.tool_calls:
+                    text = self._final_text(last_text, child_session=child_session)
+                    self._record_run(memory=child_memory, prompt=normalized_task, response=text)
+                    logger.info(
+                        (
+                            "[Subagent] Explorer 子智能体结束 child_session=%s "
+                            "reason=%s steps=%s/%s provider=%s report_chars=%s"
+                        ),
+                        child_session.key,
+                        STOP_REASON_FINAL,
+                        step,
+                        resolved_max_steps,
+                        last_provider,
+                        len(text),
+                    )
+                    return SubagentResult(
+                        text=text,
+                        provider=last_provider,
+                        steps=step,
+                        max_steps=resolved_max_steps,
+                        stop_reason=STOP_REASON_FINAL,
+                        child_session_key=child_session.key,
+                    )
+
+                observations = tool_executor.run_tool_calls(
+                    response.message.tool_calls,
+                    session=child_session,
+                    workdir=child_session.workdir,
+                )
+                recent_observation_texts.extend(_observation_texts(observations))
+                recent_observation_texts = recent_observation_texts[-3:]
+                append_tool_observations(messages, observations)
+
+            exhausted_text = self._max_steps_text(
+                last_text,
+                child_session=child_session,
+                max_steps=resolved_max_steps,
+                recent_observation_texts=tuple(recent_observation_texts),
             )
-            messages.append(response.message)
-            last_text = response.text
-            last_provider = response.provider
-
-            if not response.message.tool_calls:
-                text = self._final_text(last_text, child_session=child_session)
-                self._record_run(memory=child_memory, prompt=normalized_task, response=text)
-                logger.info(
-                    (
-                        "[Subagent] Explorer 子智能体结束 child_session=%s "
-                        "reason=%s steps=%s/%s provider=%s report_chars=%s"
-                    ),
-                    child_session.key,
-                    STOP_REASON_FINAL,
-                    step,
-                    resolved_max_steps,
-                    last_provider,
-                    len(text),
-                )
-                return SubagentResult(
-                    text=text,
-                    provider=last_provider,
-                    steps=step,
-                    max_steps=resolved_max_steps,
-                    stop_reason=STOP_REASON_FINAL,
-                    child_session_key=child_session.key,
-                )
-
-            observations = tool_executor.run_tool_calls(
-                response.message.tool_calls,
-                session=child_session,
-                workdir=child_session.workdir,
+            self._record_run(
+                memory=child_memory,
+                prompt=normalized_task,
+                response=exhausted_text,
             )
-            recent_observation_texts.extend(_observation_texts(observations))
-            recent_observation_texts = recent_observation_texts[-3:]
-            append_tool_observations(messages, observations)
-
-        exhausted_text = self._max_steps_text(
-            last_text,
-            child_session=child_session,
-            max_steps=resolved_max_steps,
-            recent_observation_texts=tuple(recent_observation_texts),
-        )
-        self._record_run(
-            memory=child_memory,
-            prompt=normalized_task,
-            response=exhausted_text,
-        )
-        logger.info(
-            (
-                "[Subagent] Explorer 子智能体结束 child_session=%s "
-                "reason=%s steps=%s/%s provider=%s report_chars=%s"
-            ),
-            child_session.key,
-            STOP_REASON_MAX_STEPS_EXHAUSTED,
-            resolved_max_steps,
-            resolved_max_steps,
-            last_provider,
-            len(exhausted_text),
-        )
-        return SubagentResult(
-            text=exhausted_text,
-            provider=last_provider,
-            steps=resolved_max_steps,
-            max_steps=resolved_max_steps,
-            stop_reason=STOP_REASON_MAX_STEPS_EXHAUSTED,
-            child_session_key=child_session.key,
-        )
+            logger.info(
+                (
+                    "[Subagent] Explorer 子智能体结束 child_session=%s "
+                    "reason=%s steps=%s/%s provider=%s report_chars=%s"
+                ),
+                child_session.key,
+                STOP_REASON_MAX_STEPS_EXHAUSTED,
+                resolved_max_steps,
+                resolved_max_steps,
+                last_provider,
+                len(exhausted_text),
+            )
+            return SubagentResult(
+                text=exhausted_text,
+                provider=last_provider,
+                steps=resolved_max_steps,
+                max_steps=resolved_max_steps,
+                stop_reason=STOP_REASON_MAX_STEPS_EXHAUSTED,
+                child_session_key=child_session.key,
+            )
+        finally:
+            clear_run_summary(run_id)
 
     def _final_text(self, text: str, *, child_session: SessionRef) -> str:
         body = text.strip() or "未找到确切答案。子智能体没有返回可用报告。"
@@ -220,6 +229,41 @@ class SubagentRunner:
     def _record_run(self, *, memory: FileMemoryStore, prompt: str, response: str) -> None:
         memory.append("last_prompt", prompt)
         memory.append("last_response", response)
+
+    def _complete_provider(
+        self,
+        *,
+        messages: tuple[Message, ...],
+        tools: tuple[ToolDefinition, ...],
+        max_steps: int,
+        session: SessionRef,
+        run_id: str,
+        step: int,
+    ) -> LLMResponse:
+        scope = ModelCallScope(
+            session_key=session.key,
+            session_source=session.source,
+            session_display_name=session.display_name,
+            run_id=run_id,
+            mode="explore",
+            phase="act",
+            step=step,
+            max_steps=max_steps,
+            caller="subagent",
+        )
+        with model_call_scope(scope):
+            try:
+                return self.provider.complete(
+                    LLMRequest(
+                        messages=messages,
+                        tools=tools,
+                        max_steps=max_steps,
+                        tool_choice=ToolChoice.AUTO,
+                    )
+                )
+            except Exception:
+                clear_run_summary(run_id)
+                raise
 
 
 def _build_read_only_tools(session: SessionRef) -> ToolRegistry:

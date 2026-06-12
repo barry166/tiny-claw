@@ -40,6 +40,38 @@ def test_openai_provider_maps_text_request_and_response() -> None:
     assert client.requests[0]["model"] == "gpt-test"
     assert client.requests[0]["max_tokens"] == 123
     assert client.requests[0]["messages"] == [{"role": "user", "content": "ping"}]
+    assert result.usage is None
+
+
+def test_openai_provider_maps_usage() -> None:
+    response = _completion_response(
+        message=SimpleNamespace(content="hello", tool_calls=None),
+        usage={
+            "prompt_tokens": 11,
+            "completion_tokens": 7,
+            "total_tokens": 18,
+            "prompt_tokens_details": {"cached_tokens": 3},
+            "completion_tokens_details": {"reasoning_tokens": 2},
+        },
+    )
+    provider = OpenAIProvider(api_key="key", model="gpt-test", client=FakeOpenAIClient(response))
+
+    result = provider.complete(LLMRequest(messages=(Message.user("ping"),)))
+
+    assert result.usage is not None
+    assert result.usage.input_tokens == 11
+    assert result.usage.output_tokens == 7
+    assert result.usage.total_tokens == 18
+    assert result.usage.cache_read_input_tokens == 3
+    assert result.usage.reasoning_output_tokens == 2
+    assert result.metadata is not None
+    assert result.metadata["usage"] == {
+        "prompt_tokens": 11,
+        "completion_tokens": 7,
+        "total_tokens": 18,
+        "prompt_tokens_details": {"cached_tokens": 3},
+        "completion_tokens_details": {"reasoning_tokens": 2},
+    }
 
 
 def test_openai_provider_stores_base_url() -> None:
@@ -138,12 +170,12 @@ def test_openai_provider_requires_api_key() -> None:
         OpenAIProvider(api_key=None, model="gpt-test", client=object())
 
 
-def _completion_response(*, message: Any) -> Any:
+def _completion_response(*, message: Any, usage: Any = None) -> Any:
     return SimpleNamespace(
         id="resp-1",
         model="gpt-test",
         choices=[SimpleNamespace(message=message, finish_reason="stop")],
-        usage=None,
+        usage=usage,
     )
 
 

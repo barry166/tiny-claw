@@ -9,7 +9,7 @@ from typing import Any
 from anthropic import Anthropic
 
 from tiny_claw._internal.errors import ConfigurationError, ProviderError
-from tiny_claw._internal.provider.base import LLMRequest, LLMResponse, ToolChoice
+from tiny_claw._internal.provider.base import LLMRequest, LLMResponse, LLMUsage, ToolChoice
 from tiny_claw._internal.schema.message import Message, Role, ToolCall, ToolDefinition
 
 
@@ -151,6 +151,7 @@ def _to_llm_response(*, response: Any, provider: str, model: str) -> LLMResponse
         elif block_type == "tool_use":
             tool_calls.append(_from_claude_tool_use(block))
 
+    raw_usage = _dump_sdk_object(getattr(response, "usage", None))
     return LLMResponse(
         message=Message.assistant(
             content="\n".join(part for part in text_blocks if part),
@@ -161,8 +162,9 @@ def _to_llm_response(*, response: Any, provider: str, model: str) -> LLMResponse
         metadata={
             "id": getattr(response, "id", None),
             "stop_reason": getattr(response, "stop_reason", None),
-            "usage": _dump_sdk_object(getattr(response, "usage", None)),
+            "usage": raw_usage,
         },
+        usage=_to_usage(raw_usage),
     )
 
 
@@ -189,3 +191,35 @@ def _dump_sdk_object(value: Any) -> Any:
     if hasattr(value, "model_dump"):
         return value.model_dump()
     return value
+
+
+def _to_usage(raw_usage: Any) -> LLMUsage | None:
+    if raw_usage is None:
+        return None
+    input_tokens = _int_or_none(_get(raw_usage, "input_tokens"))
+    output_tokens = _int_or_none(_get(raw_usage, "output_tokens"))
+    total_tokens = _sum_or_none(input_tokens, output_tokens)
+    return LLMUsage(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=total_tokens,
+        cache_read_input_tokens=_int_or_none(_get(raw_usage, "cache_read_input_tokens")),
+        cache_creation_input_tokens=_int_or_none(_get(raw_usage, "cache_creation_input_tokens")),
+    )
+
+
+def _int_or_none(value: Any) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _sum_or_none(first: int | None, second: int | None) -> int | None:
+    if first is None and second is None:
+        return None
+    return (first or 0) + (second or 0)

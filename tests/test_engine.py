@@ -19,7 +19,8 @@ from tiny_claw._internal.engine.main_loop import (
     RunMode,
     ToolPolicy,
 )
-from tiny_claw._internal.provider.base import LLMRequest, LLMResponse, ToolChoice
+from tiny_claw._internal.provider.base import LLMRequest, LLMResponse, LLMUsage, ToolChoice
+from tiny_claw._internal.provider.tracking import NullUsageRecorder, UsageTrackingProvider
 from tiny_claw._internal.schema.message import Message, Role, ToolCall, ToolDefinition
 from tiny_claw._internal.session import SessionMemoryStore, SessionRef
 from tiny_claw._internal.tools.base import ToolInput, ToolOutput
@@ -43,6 +44,18 @@ class FakeProvider:
         self.requests.append(request)
         response = self._responses[min(len(self.requests) - 1, len(self._responses) - 1)]
         return LLMResponse(message=response, provider=self.name, model="fake-model")
+
+
+class UsageFakeProvider(FakeProvider):
+    def complete(self, request: LLMRequest) -> LLMResponse:
+        self.requests.append(request)
+        response = self._responses[min(len(self.requests) - 1, len(self._responses) - 1)]
+        return LLMResponse(
+            message=response,
+            provider=self.name,
+            model="gpt-5.4",
+            usage=LLMUsage(input_tokens=829, output_tokens=119, total_tokens=948),
+        )
 
 
 class FakeTool:
@@ -137,6 +150,32 @@ def test_main_loop_accepts_injected_components(tmp_path) -> None:
     )
     assert provider.requests[0].tools == ()
     assert provider.requests[0].tool_choice is ToolChoice.AUTO
+    assert not hasattr(provider.requests[0], "context")
+
+
+def test_main_loop_logs_run_usage_summary(tmp_path, caplog) -> None:
+    raw_provider = UsageFakeProvider([Message.assistant("usage response")])
+    provider = UsageTrackingProvider(
+        inner=raw_provider,
+        recorder=NullUsageRecorder(),
+    )
+    engine = _build_engine(
+        provider=provider,
+        memory=SessionMemoryStore(tmp_path / "state"),
+        workdir=tmp_path,
+    )
+    session = _session(tmp_path, name="test_observability_001")
+
+    with caplog.at_level("INFO", logger="tiny_claw._internal.engine.main_loop"):
+        result = engine.run(prompt="ping", max_steps=1, session=session)
+
+    assert result.text == "usage response"
+    assert "会话 ID: test_observability_001" in caplog.text
+    assert "总消耗 Input Tokens: 829" in caplog.text
+    assert "总消耗 Output Tokens: 119" in caplog.text
+    assert "总计费用 (CNY): ¥0.002226" in caplog.text
+    assert "==========================================" in caplog.text
+    assert not hasattr(raw_provider.requests[0], "context")
 
 
 def test_main_loop_sends_tool_definitions(tmp_path) -> None:
@@ -652,6 +691,7 @@ def test_main_loop_plan_mode_creates_session_plan_files(tmp_path) -> None:
     assert "TC-001 Create files" in (plan_dir / "TODO.md").read_text(encoding="utf-8")
     assert provider.requests[0].tools == ()
     assert provider.requests[0].tool_choice is ToolChoice.NONE
+    assert not hasattr(provider.requests[0], "context")
 
 
 def test_main_loop_plan_mode_resumes_existing_plan_without_overwrite(tmp_path) -> None:
@@ -721,6 +761,9 @@ def test_main_loop_plan_act_creates_plan_then_exposes_tools(tmp_path) -> None:
     assert provider.requests[0].tool_choice is ToolChoice.NONE
     assert provider.requests[1].tools == (FakeTool().definition(),)
     assert provider.requests[1].tool_choice is ToolChoice.AUTO
+    assert not hasattr(provider.requests[0], "context")
+    assert not hasattr(provider.requests[1], "context")
+    assert not hasattr(provider.requests[2], "context")
     assert any(
         message.role is Role.USER and "Current TODO: TC-001 Use fake_tool" in message.content
         for message in provider.requests[1].messages
@@ -932,6 +975,7 @@ def test_main_loop_resumes_approved_high_risk_tool(tmp_path) -> None:
     assert tool.calls == 1
     assert provider.requests[1].messages[-1].role is Role.TOOL
     assert provider.requests[1].messages[-1].content == "observed:danger"
+    assert not hasattr(provider.requests[1], "context")
     consumed = approval_store.read(session.key, suspended.approval_id)
     assert consumed.status == "consumed"
 

@@ -198,8 +198,17 @@ Provider 层负责厂商适配。engine 只认识内部协议：
 - `claude.py`：适配 Claude Messages API。
 - `echo.py`：显式本地 provider，不需要 API key，用于离线开发和冒烟测试。
 - `base.py`：定义 provider-neutral 协议。
+- `tracking.py`：provider 装饰器，围绕真实 provider 记录模型调用耗时、token usage、
+  session/run/step 上下文和错误类型。
 
-这个边界的价值是：新增 provider 时只实现 `LLMProvider.complete()` 和消息转换，不需要改 engine、context 或 tools。
+`LLMRequest` 保持纯 provider contract，不携带 session 或监控字段。`MainLoop`、
+`ApprovalResumeRunner` 和 `SubagentRunner` 在调用 provider 前通过 `model_call_scope()`
+绑定当前 session/run/step/caller，`UsageTrackingProvider` 在装饰器内部读取 scope、
+计时、汇总本次 run 的 token/费用，并把 `UsageEvent` 交给 recorder。默认 recorder
+追加 `state_dir/usage/model-calls.jsonl`，且只记录元数据，不记录 prompt、assistant
+text、tool arguments 或密钥。
+
+这个边界的价值是：新增 provider 时只实现 `LLMProvider.complete()` 和消息转换，不需要改 engine、context 或 tools。新增监控出口时只新增 `UsageRecorder` adapter，不改主循环。
 
 ### Memory 层：`memory/`
 
