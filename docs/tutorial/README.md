@@ -32,5 +32,6 @@
 | `26-subagent-observability.md` | 给 Subagent 加上可读日志：从启动、结束到 child tool 标记 | Subagent 日志与可观测性增强 | 后续维护者 / 测试工程师 |
 | `27-openai-subagent-live-test.md` | 如何为 AI Agent Subagent 写一个真实 OpenAI E2E 测试 | OpenAI Live E2E 测试用例 | 测试工程师 / AI Agent 框架开发者 |
 | `28-tool-concurrency-boundaries.md` | Tiny Claw 的工具并发模型：为什么 read 可以并发，explore 暂不并发 | 工具并发边界分析 | 架构设计读者 / 后续维护者 |
+| `29-agent-tracing-json-decision-tree.md` | 从黑盒到决策树：为 Agent 实现轻量级 Tracing | Agent 本地链路追踪与 JSON 决策树 | AI Agent 框架开发者 / Python CLI 开发者 / 后续维护者 |
 
 > 说明：这些教程按当前代码库中的已实现模块组织。发布到具体版本文档时，应以对应版本的代码和测试结果为准。
