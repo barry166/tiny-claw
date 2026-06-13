@@ -9,6 +9,7 @@ description = "An industrial Python CLI framework skeleton."
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "Tiny Claw Authors" }]
+license = "MIT"
 dependencies = [
     "anthropic>=0.104,<1",
     "lark-oapi[aiohttp]>=1.6.8,<2",
