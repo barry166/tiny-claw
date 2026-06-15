@@ -1,5 +1,13 @@
 # 拆分 MainLoop 中的审批恢复职责
 
+## 本节目标
+
+> 导读：本篇属于第四部分「外部集成与审批恢复」的维护者篇：审批恢复进入主循环后，需要拆出职责边界，避免 `MainLoop` 重新变成黑盒。
+
+本节要完成的是审批恢复后的主循环职责整理：在行为不变的前提下，把运行类型、工具策略、observation 处理和恢复 runner 拆出稳定边界。
+
+完成这一节后，你会理解如何避免 `MainLoop` 在支持恢复后变成新的黑盒。
+
 ## 摘要
 
 本文要说明 `tiny-claw` 如何在引入审批恢复后，拆分过长的 `MainLoop`，把运行类型、工具策略、observation 处理和审批恢复抽成更清晰的模块。这个模块适合后续维护者、Agent 主循环开发者和关注工程化重构的读者。读完后，你会理解这次重构保留了哪些主循环职责、抽出了哪些稳定接口，以及如何在不改变行为的前提下降低主循环复杂度。
@@ -188,7 +196,7 @@ uv run mypy src
 uv run pytest
 ```
 
-这次实现阶段已用完整验证命令跑通过，测试规模为 `196 passed`。发布具体版本文档时，应以对应版本仓库的实际测试结果为准。
+这次实现阶段已用完整验证命令跑通过；发布具体版本文档时，应以对应版本仓库的实际验证结果为准。
 
 ## 设计取舍与注意事项
 
@@ -207,3 +215,5 @@ uv run pytest
 - `run_policy.py` 集中 phase 和 tool policy 规则。
 - `observations.py` 复用普通 run 和 resumed run 的 observation 处理。
 - `approval_resume.py` 承担 approved/rejected 后的恢复流程，同时避免复制主循环全部职责。
+
+按编号继续阅读：[23：Explorer Subagent runtime](23-explorer-subagent-runtime.md) 会进入 Subagent 体系，把复杂代码探索从父 Agent 上下文中隔离出去。

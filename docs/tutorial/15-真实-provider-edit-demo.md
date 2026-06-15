@@ -1,5 +1,13 @@
 # 用真实模型验收 Agent 的文件编辑工具
 
+## 本节目标
+
+> 导读：本篇属于第六部分「测试与验收」，用真实 Provider 路径补上 fake provider 无法证明的一环：模型是否真的会按工具描述完成编辑。
+
+本节要补充的是真实 Provider 下的编辑流程验收：用脚本验证模型能否在真实工具描述下完成 `read + edit`。
+
+完成这一节后，你会知道 fake provider 与 live demo 分别证明什么，以及如何判断真实模型路径是否真的可用。
+
 ## 摘要
 
 本文说明如何用 `tests/demo_edit_flow.py` 跑一次真实 Provider 下的 `read + edit` 文件编辑流程。它适合项目使用者、Agent 框架开发者和后续维护者阅读。读完后，你会知道怎么配置真实模型、怎么判断编辑是否真的生效，以及为什么这类 live demo 只能做补充验收，不能替代稳定的自动化测试。
@@ -215,3 +223,5 @@ uv run pytest
 - `edit` 作为写类工具必须显式启用，demo 也遵守这个边界。
 - live demo 不应替代单元测试和 Engine 流程测试。
 - 真实验收时不要暴露 API key、base URL 或本地私有路径。
+
+按编号继续阅读：[16：通用 Tool Middleware](16-通用-tool-middleware-链式执行.md) 会把运行时策略和审批能力接入工具链。

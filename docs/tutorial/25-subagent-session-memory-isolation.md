@@ -1,5 +1,13 @@
 # AI Agent 的子会话隔离：让探索结果回流而不是上下文泄洪
 
+## 本节目标
+
+> 导读：本篇属于第五部分「Subagent 与可观测性」，继续收紧父子状态边界：child memory 记录探索过程，父循环只接收报告。
+
+本节要实现的是 Subagent 的子会话与记忆隔离：child session 记录探索过程，父 session 只接收最终报告。
+
+完成这一节后，你会理解为什么父循环不能吸收完整子任务消息链。
+
 ## 摘要
 
 本文要说明 Explorer Subagent 如何通过独立 `SessionRef` 和独立 memory store 隔离子任务状态。读者可以了解 child session 的派生方式、父子 memory 的边界，以及为什么父循环只接收精炼报告而不是完整子任务消息链。
@@ -144,3 +152,4 @@ memory 存储仍然使用 JSONL 文件。它足够透明、易测试，也和现
 - 文件系统 JSONL 继续作为轻量、透明的 memory 存储。
 - 这个边界是后续 subagent 并发和审计能力的基础。
 
+按 Subagent 专题继续阅读：[26：Subagent 可观测性](26-subagent-observability.md) 会让嵌套运行过程在日志里可读可查。

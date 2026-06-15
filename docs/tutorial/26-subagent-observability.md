@@ -1,5 +1,13 @@
 # 给 Subagent 加上可读日志：从启动、结束到 child tool 标记
 
+## 本节目标
+
+> 导读：本篇属于第五部分「Subagent 与可观测性」，让嵌套 Agent 的启动、结束和内部工具调用在日志里有清楚归属。
+
+本节要实现的是 Subagent 的可读日志：让启动、结束、child tool 调用和报告长度都能被维护者定位。
+
+完成这一节后，你会理解嵌套 Agent 的日志为什么必须标记归属。
+
 ## 摘要
 
 本文要说明如何让 Explorer Subagent 的运行过程可观察。读者可以了解 `tiny-claw` 如何记录子智能体启动、结束、内部工具调用和报告长度，以及如何通过 `subagent_session=...` 区分父工具和 child tool 日志。
@@ -181,3 +189,4 @@ uv run pytest
 - 日志增强不改变工具执行语义，只提升审计和调试体验。
 - 对嵌套 Agent 来说，可观测性是架构边界的一部分。
 
+按 Subagent 专题继续阅读：[27：OpenAI Subagent live test](27-openai-subagent-live-test.md) 会用真实模型链路补充验收。

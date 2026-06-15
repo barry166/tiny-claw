@@ -1,5 +1,13 @@
 # 把飞书接成审批 Adapter，而不是工具
 
+## 本节目标
+
+> 导读：本篇属于第四部分「外部集成与审批恢复」，说明 Feishu 在审批体系中是平台 adapter，而不是模型可见工具。
+
+本节要实现的是 Feishu 审批 adapter：把审批通知和 `/approve` / `/reject` 命令接入通用审批流程，同时保持工具系统不依赖平台 SDK。
+
+完成这一节后，你会理解为什么飞书是外部 adapter，而不是模型可见工具。
+
 ## 摘要
 
 本文要说明 `tiny-claw` 如何把 Feishu 接入人工审批流程，同时保持工具系统和外部平台解耦。这个模块适合外部集成维护者、Agent 平台开发者和需要在聊天工具中审批高危操作的读者。读完后，你会理解 `FeishuChannel.request_approval(...)`、`/approve`、`/reject` 的职责边界，以及为什么飞书不应该注册成模型可见工具。
@@ -225,3 +233,5 @@ uv run pytest
 - `/approve` 和 `/reject` 命令走 `Application.resume_approval(...)`。
 - 普通 Feishu 文本消息仍复用 `Application.run(...)`。
 - 平台能力被隔离在 integration 层，审批核心保持通用。
+
+按审批专题继续阅读：[21：审批流程测试与验证](21-审批流程测试与验证.md) 会把这条跨模块链路变成可证明的行为。

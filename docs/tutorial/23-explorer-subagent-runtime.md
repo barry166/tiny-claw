@@ -1,5 +1,13 @@
 # 为 AI Agent 设计一个只读 Explorer Subagent
 
+## 本节目标
+
+> 导读：本篇进入第五部分「Subagent 与可观测性」，先解决复杂探索的上下文隔离问题：让 Explorer Subagent 在 child session 中完成阅读。
+
+本节要实现的是同步、只读、上下文隔离的 Explorer Subagent：让复杂探索在 child session 中完成，只把精炼报告回流父循环。
+
+完成这一节后，你会理解 Subagent 解决的是上下文隔离问题，而不是简单多调用一次模型。
+
 ## 摘要
 
 本文要说明如何在 `tiny-claw` 中实现一个同步、只读、上下文隔离的 Explorer Subagent。它适合需要大量代码阅读、跨文件查找和日志定位的场景，读者可以了解如何把复杂探索过程移出父 Agent 上下文，只让精炼报告回流主循环。
@@ -159,3 +167,4 @@ v1 选择只读工具，而不是继承父工具集。即使父 Agent 启用了 
 - 父循环只收到 `[Explorer Subagent Report]`，不会吸收完整子任务消息链。
 - 后续扩展并发和更多工具能力时，应继续保持清晰的权限边界。
 
+按 Subagent 专题继续阅读：[24：explore 工具 adapter](24-explore-tool-adapter.md) 会把子智能体能力接入普通工具系统。

@@ -1,5 +1,13 @@
 # 让 ToolRegistry 支持通用 Middleware 链式执行
 
+## 本节目标
+
+> 导读：本篇回到第二部分「工具与安全边界」，为策略、审批、审计等横切能力建立统一的 middleware 入口。
+
+本节要实现的是通用 Tool Middleware 链：让运行时策略、人工审批、审计等横切逻辑可以包裹工具执行，而不是写死在 `ToolExecutor` 或具体工具中。
+
+完成这一节后，你会理解 `ToolRegistry.use(...)` 的注册语义、短路行为和执行顺序。
+
 ## 摘要
 
 本文要说明 `tiny-claw` 如何把工具调用从“直接执行 Tool”升级为“经过通用 middleware 链后再执行 Tool”。这个模块适合 AI Agent 框架开发者、工具系统维护者和希望扩展运行时拦截能力的读者。读完后，你会理解 `ToolRegistry.use(...)` 的注册语义、middleware 的调用顺序，以及为什么高危审批、审计、策略控制都不应该写死在单个工具里。
@@ -213,3 +221,5 @@ middleware 本身不应该知道模型 provider，也不应该直接向 Feishu�
 - `ToolExecutionResult` 用 `completed/denied/suspended` 明确表达运行状态。
 - 高危审批、运行时策略、审计等横切能力可以放进链路，而不是污染工具实现。
 - 新执行路径保留旧接口兼容，但主流程应走 `registry.execute(ctx)`。
+
+按工具专题继续阅读：[17：运行时工具策略](17-运行时工具策略-allowlist-denylist.md) 会先用 allowlist / denylist 收窄工具调用。

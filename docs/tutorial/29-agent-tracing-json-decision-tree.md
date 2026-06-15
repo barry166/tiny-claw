@@ -1,8 +1,32 @@
 # 从黑盒到决策树：为 Agent 实现轻量级 Tracing
 
+## 本节目标
+
+> 导读：本篇属于第五部分「Subagent 与可观测性」的收束篇：把一次 Agent run 中的模型、工具、审批和 Subagent 行为记录成可回放的决策树。
+
+本节要实现的是本地轻量级 Agent Tracing：把一次运行中的主循环、模型调用、工具调用、审批恢复和 Subagent 组织成 JSON 决策树。
+
+完成这一节后，你会理解 tracing 应该插在运行时观测层，而不是污染 provider、tool 或 message 协议。
+
 ## 摘要
 
 本文要说明如何在 `tiny-claw` 中实现一套本地轻量级 Agent Tracing，把一次 Agent 运行固化为可回放的 JSON 决策树。它适合 AI Agent 框架开发者、Python CLI 开发者和后续维护者阅读。读完后，你会理解 tracing 应该插在架构的什么位置、如何记录 `agent.run -> agent.step -> llm.call / tool.call`，以及如何在保护隐私的前提下保留足够的排障信息。
+
+阅读提示：本篇内容较长。快速阅读时可以先看下面的“快速版”，再看“整体方案”“使用方式”和“总结”；需要维护实现时，再深入“核心实现”和“设计取舍与注意事项”。
+
+## 快速版
+
+Tracing 要解决的是“运行后无法复盘”的问题。日志能告诉你发生了什么片段，但很难还原一次 run 的树形结构：哪一步调用了模型，模型返回了哪些工具，哪个工具触发了审批，哪个 `explore` 又启动了子智能体。
+
+`tiny-claw` 的设计选择是：
+
+- Tracing 是运行时观测层，不进入 provider、tool 或 message 协议。
+- 一次运行以 `agent.run` 为根，下面挂 `agent.step`、`llm.call`、`tool.call`、`approval.*` 和 `subagent.run`。
+- 默认 `metadata` 模式只保存 hash、keys、chars、耗时等元数据，避免把 prompt、工具参数和模型正文写进 trace。
+- 需要更强复盘能力时，`replay` 模式才保存脱敏和截断后的 payload。
+- 并发工具调用必须显式传 parent span，保证 children 归属正确、输出顺序稳定。
+
+如果你只想知道这套 tracing 为什么存在，可以读到这里再跳到“使用方式”。如果你要改实现，则继续看下面的 span 数据模型、注入点和并发处理。
 
 ## 背景与问题
 
@@ -460,3 +484,5 @@ Span 创建时直接挂到 parent 的 `children`，同时写入 `spans_by_id` �
 - 默认 `metadata` 模式保护隐私，`replay` 模式才保存脱敏和截断后的 payload。
 - 主循环、模型调用、工具调用、审批暂停/恢复和 Subagent 都被纳入同一条 trace。
 - 并发工具调用需要显式传递 parent span，才能保证 children 归属和输出顺序稳定。
+
+到这里，教程主线已经覆盖基础运行时、工具安全、上下文状态、外部集成、Subagent 和可观测性。按模块回看时，可以回到 [教程索引](README.md)。

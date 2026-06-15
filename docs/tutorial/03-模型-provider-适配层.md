@@ -2,6 +2,8 @@
 
 ## 本节目标
 
+> 导读：本篇属于第一部分「基础运行时」，聚焦模型接入层：用 Provider 隔离厂商 SDK 与消息格式差异。
+
 本节要实现的是 `tiny-claw` 的模型 Provider 适配层：让 OpenAI、Claude 和本地 Echo Provider 都能通过同一套内部协议接入 Agent 主循环。
 
 完成这一节后，系统会具备下面这些能力：
@@ -169,3 +171,5 @@ Provider 只做一件事：把内部协议翻译成厂商请求，再把厂商�
 - OpenAI、Claude 和 Echo 共用同一套内部消息协议。
 - Echo Provider 保留了离线开发和 smoke test 能力。
 - 新增模型厂商时，应优先新增 provider adapter，而不是修改 engine。
+
+按编号继续阅读：[04：受控工具系统](04-受控工具系统.md) 会让模型从“会回答”走向“能行动”时仍然有权限边界。

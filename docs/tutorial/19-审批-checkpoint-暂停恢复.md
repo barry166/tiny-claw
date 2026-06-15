@@ -1,5 +1,13 @@
 # 用 Checkpoint 实现审批后的暂停与恢复
 
+## 本节目标
+
+> 导读：本篇进入第四部分「外部集成与审批恢复」的核心：审批不能阻塞等待，必须用 checkpoint 保存可恢复的运行现场。
+
+本节要实现的是审批后的 checkpoint 暂停与恢复：把原始 messages、pending tool call 和运行参数持久化，让人工决策后可以安全继续。
+
+完成这一节后，你会理解为什么审批不能阻塞等待，以及恢复路径如何做到 fail closed。
+
 ## 摘要
 
 本文要说明 `tiny-claw` 如何在高危工具调用被拦截后，使用持久化 approval 和 checkpoint 恢复原始运行。这个模块适合 Agent 主循环开发者、状态管理维护者和需要实现人工审批恢复机制的读者。读完后，你会理解为什么不能阻塞进程等待审批、checkpoint 保存了哪些信息，以及恢复时如何做到 fail closed。
@@ -231,3 +239,5 @@ uv run pytest
 - 审批通过后执行原始 frozen tool call。
 - 审批拒绝后注入 rejected observation，让模型继续回应。
 - 恢复路径坚持 fail closed，防止跨 session、过期或重放执行。
+
+按审批专题继续阅读：[20：Feishu 审批 adapter](20-飞书审批-adapter.md) 会把通用审批流程接到真实聊天平台。
