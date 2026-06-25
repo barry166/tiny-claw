@@ -1,0 +1,40 @@
+name: Bug report
+description: Report a reproducible tiny-claw bug.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction
+      description: Provide the smallest command, config, or test case that reproduces the issue.
+      placeholder: |
+        uv sync --dev
+        TINY_CLAW_PROVIDER=echo uv run tiny-claw ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Python version, OS, provider, and relevant tiny-claw environment variables.
+      placeholder: |
+        Python:
+        OS:
+        Provider:
+        Command:
+    validations:
+      required: true

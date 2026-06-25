@@ -5,11 +5,31 @@ build-backend = "hatchling.build"
 [project]
 name = "tiny-claw"
 version = "0.1.0"
-description = "An industrial Python CLI framework skeleton."
+description = "A tiny readable agent harness for Python CLI agents."
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "Tiny Claw Authors" }]
 license = "MIT"
+keywords = [
+    "agent",
+    "agent-harness",
+    "ai-agent",
+    "cli",
+    "developer-tools",
+    "llm",
+    "python",
+    "react-agent",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+    "Topic :: Software Development :: User Interfaces",
+]
 dependencies = [
     "anthropic>=0.104,<1",
     "lark-oapi[aiohttp]>=1.6.8,<2",
@@ -18,6 +38,12 @@ dependencies = [
 
 [project.scripts]
 tiny-claw = "tiny_claw.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/barry166/tiny-claw"
+Repository = "https://github.com/barry166/tiny-claw"
+Issues = "https://github.com/barry166/tiny-claw/issues"
+Documentation = "https://github.com/barry166/tiny-claw/tree/codex/session-plan-mode-cli/docs"
 
 [dependency-groups]
 dev = [

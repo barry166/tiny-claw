@@ -1,0 +1,28 @@
+name: Example request
+description: Suggest a small runnable example for the repository.
+title: "[Example]: "
+labels: ["example"]
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: Example goal
+      description: What should the example teach or demonstrate?
+    validations:
+      required: true
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Preferred provider
+      options:
+        - echo
+        - openai
+        - claude
+        - any
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Any commands, fixtures, or docs this example should connect to?
